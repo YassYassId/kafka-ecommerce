@@ -1,3 +1,11 @@
+server:
+  port: 8081
+
 spring:
   application:
     name: orders-service
+  datasource:
+      url: jdbc:postgresql://localhost:5433/orders
+      username: orders_user
+      password: orders_password
+      driver-class-name: org.postgresql.Driver
