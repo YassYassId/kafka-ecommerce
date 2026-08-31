@@ -29,25 +29,65 @@ class OrderRepositoryTest {
     void shouldSaveAndRetrieveOrderWithItems() {
         // 1. Create and save an Order
         UUID orderId = UUID.randomUUID();
+        UUID customerId = UUID.randomUUID();
+
         Order order = Order.builder()
                 .id(orderId)
-                .customerId(UUID.randomUUID())
-                .status(OrderStatus.PENDING) // matches DB check constraint PENDING/CONFIRMED/CANCELLED
+                .customerId(customerId)
+                .status(OrderStatus.PENDING)
                 .createdAt(OffsetDateTime.now())
                 .updatedAt(OffsetDateTime.now())
                 .build();
-        Order savedOrder = orderRepository.save(order);
+
+        Order savedOrder = orderRepository.saveAndFlush(order);
+
         assertThat(savedOrder).isNotNull();
+        assertThat(savedOrder.getId()).isEqualTo(orderId);
+
         // 2. Create and save an OrderItem associated with the Order
+        UUID productId = UUID.randomUUID();
+
         OrderItem item = OrderItem.builder()
                 .id(UUID.randomUUID())
                 .order(savedOrder)
-                .productId(UUID.randomUUID())
+                .productId(productId)
                 .quantity(2)
                 .build();
-        OrderItem savedItem = orderItemsRepository.save(item);
+
+        OrderItem savedItem = orderItemsRepository.saveAndFlush(item);
+
         assertThat(savedItem).isNotNull();
         assertThat(savedItem.getOrder().getId()).isEqualTo(orderId);
+
+        // 3. Retrieve the Order from the database
+        entityManager.clear();
+
+        Order retrievedOrder = orderRepository.findById(orderId)
+                .orElseThrow();
+
+        // 4. Verify the retrieved Order
+        assertThat(retrievedOrder.getId())
+                .isEqualTo(orderId);
+
+        assertThat(retrievedOrder.getCustomerId())
+                .isEqualTo(customerId);
+
+        assertThat(retrievedOrder.getStatus())
+                .isEqualTo(OrderStatus.PENDING);
+
+        // 5. Retrieve the OrderItem from the database
+        OrderItem retrievedItem = orderItemsRepository
+                .findById(savedItem.getId())
+                .orElseThrow();
+
+        assertThat(retrievedItem.getProductId())
+                .isEqualTo(productId);
+
+        assertThat(retrievedItem.getQuantity())
+                .isEqualTo(2);
+
+        assertThat(retrievedItem.getOrder().getId())
+                .isEqualTo(orderId);
     }
     @Test
     void shouldFailWhenQuantityIsZeroOrNegative() {
@@ -97,5 +137,44 @@ class OrderRepositoryTest {
         // Verify that the order items were deleted automatically from the database
         assertThat(orderRepository.findById(savedOrder.getId())).isEmpty();
         assertThat(orderItemsRepository.findById(item.getId())).isEmpty();
+    }
+
+    @Test
+    void shouldFailWhenSameProductIsAddedTwiceToSameOrder() {
+        // 1. Create and save an Order
+        Order savedOrder = orderRepository.saveAndFlush(
+                Order.builder()
+                        .id(UUID.randomUUID())
+                        .customerId(UUID.randomUUID())
+                        .status(OrderStatus.PENDING)
+                        .createdAt(OffsetDateTime.now())
+                        .updatedAt(OffsetDateTime.now())
+                        .build()
+        );
+
+        // 2. Create the first OrderItem
+        UUID productId = UUID.randomUUID();
+
+        OrderItem firstItem = OrderItem.builder()
+                .id(UUID.randomUUID())
+                .order(savedOrder)
+                .productId(productId)
+                .quantity(2)
+                .build();
+
+        orderItemsRepository.saveAndFlush(firstItem);
+
+        // 3. Try to add the same product to the same order again
+        OrderItem duplicateItem = OrderItem.builder()
+                .id(UUID.randomUUID())
+                .order(savedOrder)
+                .productId(productId)
+                .quantity(3)
+                .build();
+
+        // 4. The database should reject the duplicate
+        assertThatThrownBy(() ->
+                orderItemsRepository.saveAndFlush(duplicateItem)
+        ).isInstanceOf(DataIntegrityViolationException.class);
     }
 }
