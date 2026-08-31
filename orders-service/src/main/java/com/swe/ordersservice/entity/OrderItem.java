@@ -1,10 +1,7 @@
 package com.swe.ordersservice.entity;
 
 import jakarta.persistence.*;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.util.UUID;
 
@@ -12,13 +9,17 @@ import java.util.UUID;
         uniqueConstraints = @UniqueConstraint(name = "uq_order_product",
                 columnNames = {"order_id", "product_id"}))
 @AllArgsConstructor @NoArgsConstructor
-@Data @Builder
+@Getter @Setter @Builder
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
+@ToString(exclude = "order")
 public class OrderItem {
 
     @Id
+    @GeneratedValue(strategy = GenerationType.UUID)
+    @EqualsAndHashCode.Include
     private UUID id;
 
-    @ManyToOne
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "order_id", nullable = false)
     private Order order;
 
