@@ -23,8 +23,6 @@ public class OrderServiceImpl implements OrderService {
     @Transactional
     public OrderResponse createOrder(OrderRequest request) {
 
-        OffsetDateTime now = OffsetDateTime.now();
-
         // 1. Create the Order
         Order order = Order.builder()
                 .customerId(request.customerId())
