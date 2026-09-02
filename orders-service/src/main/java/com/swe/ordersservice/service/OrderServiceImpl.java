@@ -6,12 +6,18 @@ import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.Order;
 import com.swe.ordersservice.entity.OrderItem;
 import com.swe.ordersservice.entity.OrderStatus;
+import com.swe.ordersservice.event.OrderCreatedEvent;
+import com.swe.ordersservice.event.OrderCreatedItem;
 import com.swe.ordersservice.exception.OrderNotFoundException;
+import com.swe.ordersservice.outbox.OutboxEvent;
+import com.swe.ordersservice.outbox.OutboxEventFactory;
+import com.swe.ordersservice.outbox.OutboxEventRepository;
 import com.swe.ordersservice.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Service
@@ -19,6 +25,8 @@ import java.util.UUID;
 public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
+    private final OutboxEventRepository outboxEventRepository;
+    private final OutboxEventFactory outboxEventFactory;
 
     @Override
     @Transactional
@@ -44,7 +52,27 @@ public class OrderServiceImpl implements OrderService {
         // 3. Persist the Order and all its items
         Order savedOrder = orderRepository.save(order);
 
-        // 4. Return the API response
+        // 4. Create an OrderCreatedEvent and save it to the outbox
+        OrderCreatedEvent event = new OrderCreatedEvent(
+                UUID.randomUUID(),
+                savedOrder.getId(),
+                savedOrder.getCustomerId(),
+                savedOrder.getItems().stream()
+                        .map(item -> new OrderCreatedItem(
+                                item.getProductId(),
+                                item.getQuantity()
+                        ))
+                        .toList(),
+                Instant.now(),
+                1
+        );
+
+        // 5. Serialize the event and save it to the outbox
+        OutboxEvent outboxEvent = outboxEventFactory.create(event);
+
+        outboxEventRepository.save(outboxEvent);
+
+        // 6. Return the API response
         return new OrderResponse(
                 savedOrder.getId(),
                 savedOrder.getStatus()
