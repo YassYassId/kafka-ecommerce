@@ -5,6 +5,7 @@ import com.swe.ordersservice.dto.OrderRequest;
 import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.Order;
 import com.swe.ordersservice.entity.OrderStatus;
+import com.swe.ordersservice.exception.OrderNotFoundException;
 import com.swe.ordersservice.repository.OrderRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -16,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -107,6 +109,49 @@ class OrderServiceImplTest {
                     .hasMessage("Database connectivity failure");
 
             verify(orderRepository).save(any(Order.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("getOrder")
+    class GetOrderTests {
+
+        @Test
+        @DisplayName("should return order response when order exists")
+        void shouldReturnOrderResponseWhenOrderExists() {
+            // Arrange
+            UUID orderId = UUID.randomUUID();
+            Order existingOrder = Order.builder()
+                    .id(orderId)
+                    .customerId(UUID.randomUUID())
+                    .status(OrderStatus.PENDING)
+                    .build();
+
+            when(orderRepository.findById(orderId)).thenReturn(Optional.of(existingOrder));
+
+            // Act
+            OrderResponse response = orderService.getOrder(orderId);
+
+            // Assert
+            assertThat(response).isNotNull();
+            assertThat(response.orderId()).isEqualTo(orderId);
+            assertThat(response.status()).isEqualTo(OrderStatus.PENDING);
+            verify(orderRepository).findById(orderId);
+        }
+
+        @Test
+        @DisplayName("should throw OrderNotFoundException when order does not exist")
+        void shouldThrowOrderNotFoundExceptionWhenOrderDoesNotExist() {
+            // Arrange
+            UUID nonExistentOrderId = UUID.randomUUID();
+            when(orderRepository.findById(nonExistentOrderId)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThatThrownBy(() -> orderService.getOrder(nonExistentOrderId))
+                    .isInstanceOf(OrderNotFoundException.class)
+                    .hasMessage("Order not found with ID: " + nonExistentOrderId);
+
+            verify(orderRepository).findById(nonExistentOrderId);
         }
     }
 }

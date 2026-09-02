@@ -6,12 +6,13 @@ import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.Order;
 import com.swe.ordersservice.entity.OrderItem;
 import com.swe.ordersservice.entity.OrderStatus;
+import com.swe.ordersservice.exception.OrderNotFoundException;
 import com.swe.ordersservice.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.OffsetDateTime;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -47,6 +48,18 @@ public class OrderServiceImpl implements OrderService {
         return new OrderResponse(
                 savedOrder.getId(),
                 savedOrder.getStatus()
+        );
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public OrderResponse getOrder(UUID orderId) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+        return new OrderResponse(
+                order.getId(),
+                order.getStatus()
         );
     }
 }
