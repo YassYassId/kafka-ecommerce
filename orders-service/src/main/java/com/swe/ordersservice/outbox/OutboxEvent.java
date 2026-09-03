@@ -39,6 +39,9 @@ public class OutboxEvent {
     @Column(name = "published_at")
     private OffsetDateTime publishedAt;
 
+    @Column(name = "claimed_until")
+    private OffsetDateTime claimedUntil;
+
     @Column(name = "retry_count", nullable = false)
     private int retryCount;
 
