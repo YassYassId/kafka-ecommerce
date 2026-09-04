@@ -8,6 +8,7 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -125,5 +126,136 @@ class OutboxEventRepositoryTest {
         OutboxEvent updatedEvent = outboxEventRepository.findById(eventId).orElseThrow();
         assertThat(updatedEvent.getRetryCount()).isEqualTo(1);
         assertThat(updatedEvent.getLastError()).isEqualTo("Connection timeout to broker");
+    }
+
+    @Test
+    @DisplayName("should mark outbox event as published using custom repository modifying query")
+    void shouldMarkAsPublishedUsingCustomQuery() {
+        // Arrange
+        UUID eventId = UUID.randomUUID();
+        OutboxEvent event = OutboxEvent.builder()
+                .id(eventId)
+                .aggregateType("Order")
+                .aggregateId(UUID.randomUUID())
+                .eventType("OrderCreated")
+                .eventVersion(1)
+                .payload("{}")
+                .createdAt(OffsetDateTime.now())
+                .retryCount(0)
+                .build();
+
+        outboxEventRepository.saveAndFlush(event);
+        entityManager.clear();
+
+        // Act
+        int updatedRows = outboxEventRepository.markAsPublished(eventId);
+        entityManager.clear();
+
+        // Assert
+        assertThat(updatedRows).isEqualTo(1);
+        OutboxEvent updatedEvent = outboxEventRepository.findById(eventId).orElseThrow();
+        assertThat(updatedEvent.getPublishedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("should record failure and increment retry_count using custom repository modifying query")
+    void shouldRecordFailureUsingCustomQuery() {
+        // Arrange
+        UUID eventId = UUID.randomUUID();
+        OutboxEvent event = OutboxEvent.builder()
+                .id(eventId)
+                .aggregateType("Order")
+                .aggregateId(UUID.randomUUID())
+                .eventType("OrderCreated")
+                .eventVersion(1)
+                .payload("{}")
+                .createdAt(OffsetDateTime.now())
+                .retryCount(0)
+                .build();
+
+        outboxEventRepository.saveAndFlush(event);
+        entityManager.clear();
+
+        // Act
+        int updatedRows = outboxEventRepository.recordFailure(eventId, "Broker disconnected");
+        entityManager.clear();
+
+        // Assert
+        assertThat(updatedRows).isEqualTo(1);
+        OutboxEvent updatedEvent = outboxEventRepository.findById(eventId).orElseThrow();
+        assertThat(updatedEvent.getRetryCount()).isEqualTo(1);
+        assertThat(updatedEvent.getLastError()).isEqualTo("Broker disconnected");
+    }
+
+    @Test
+    @DisplayName("should find claimable events and skip published or active leases")
+    void shouldFindClaimableEventsCorrectly() {
+        // Arrange
+        UUID claimableId1 = UUID.randomUUID();
+        UUID claimableId2 = UUID.randomUUID();
+        UUID publishedId = UUID.randomUUID();
+        UUID lockedId = UUID.randomUUID();
+
+        // Event 1: Unclaimed & unpublished -> claimable
+        OutboxEvent event1 = OutboxEvent.builder()
+                .id(claimableId1)
+                .aggregateType("Order")
+                .aggregateId(UUID.randomUUID())
+                .eventType("OrderCreated")
+                .eventVersion(1)
+                .payload("{}")
+                .createdAt(OffsetDateTime.now().minusMinutes(5))
+                .retryCount(0)
+                .build();
+
+        // Event 2: Expired lease & unpublished -> claimable
+        OutboxEvent event2 = OutboxEvent.builder()
+                .id(claimableId2)
+                .aggregateType("Order")
+                .aggregateId(UUID.randomUUID())
+                .eventType("OrderCreated")
+                .eventVersion(1)
+                .payload("{}")
+                .createdAt(OffsetDateTime.now().minusMinutes(4))
+                .claimedUntil(OffsetDateTime.now().minusSeconds(10))
+                .retryCount(1)
+                .build();
+
+        // Event 3: Already published -> NOT claimable
+        OutboxEvent event3 = OutboxEvent.builder()
+                .id(publishedId)
+                .aggregateType("Order")
+                .aggregateId(UUID.randomUUID())
+                .eventType("OrderCreated")
+                .eventVersion(1)
+                .payload("{}")
+                .createdAt(OffsetDateTime.now().minusMinutes(3))
+                .publishedAt(OffsetDateTime.now())
+                .retryCount(0)
+                .build();
+
+        // Event 4: Currently locked (lease in future) -> NOT claimable
+        OutboxEvent event4 = OutboxEvent.builder()
+                .id(lockedId)
+                .aggregateType("Order")
+                .aggregateId(UUID.randomUUID())
+                .eventType("OrderCreated")
+                .eventVersion(1)
+                .payload("{}")
+                .createdAt(OffsetDateTime.now().minusMinutes(2))
+                .claimedUntil(OffsetDateTime.now().plusSeconds(30))
+                .retryCount(0)
+                .build();
+
+        outboxEventRepository.saveAllAndFlush(List.of(event1, event2, event3, event4));
+        entityManager.clear();
+
+        // Act
+        List<OutboxEvent> claimableEvents = outboxEventRepository.findClaimableEvents();
+
+        // Assert
+        List<UUID> claimableIds = claimableEvents.stream().map(OutboxEvent::getId).toList();
+        assertThat(claimableIds).contains(claimableId1, claimableId2);
+        assertThat(claimableIds).doesNotContain(publishedId, lockedId);
     }
 }
