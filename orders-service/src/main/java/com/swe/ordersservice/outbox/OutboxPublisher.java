@@ -12,7 +12,6 @@ import org.springframework.stereotype.Component;
 @Slf4j
 public class OutboxPublisher {
 
-    private final OutboxEventRepository outboxEventRepository;
     private final OrderEventProducer orderEventProducer;
     private final OutboxEventService outboxEventService;
 
@@ -31,7 +30,31 @@ public class OutboxPublisher {
 
                 log.info("Published outbox event {} to Kafka", event.getId());
             } catch (Exception e) {
-                log.error("Failed to publish outbox event {}", event.getId(), e);
+                String errorMessage = e.getMessage();
+
+                if (errorMessage == null) {
+                    errorMessage = e.getClass().getSimpleName();
+                }
+
+                try {
+                    outboxEventService.recordFailure(
+                            event.getId(),
+                            errorMessage
+                    );
+                } catch (Exception updateException) {
+                    log.error(
+                            "Failed to record failure for outbox event {}",
+                            event.getId(),
+                            updateException
+                    );
+                }
+
+                log.error(
+                        "Failed to publish outbox event {}. Error: {}",
+                        event.getId(),
+                        errorMessage,
+                        e
+                );
             }
         }
     }

@@ -31,4 +31,16 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
         FOR UPDATE SKIP LOCKED
         """, nativeQuery = true)
     List<OutboxEvent> findClaimableEvents();
+
+    @Modifying
+    @Query("""
+        UPDATE OutboxEvent e
+        SET e.retryCount = e.retryCount + 1,
+            e.lastError = :error
+        WHERE e.id = :id
+        """)
+    int recordFailure(
+            @Param("id") UUID id,
+            @Param("error") String error
+    );
 }

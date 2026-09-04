@@ -37,4 +37,19 @@ public class OutboxEventService {
         outboxEventRepository.saveAll(events);
         return events;
     }
+
+    @Transactional
+    public void recordFailure(UUID eventId, String error) {
+
+        int updated = outboxEventRepository.recordFailure(
+                eventId,
+                error
+        );
+
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "Failed to record failure for outbox event: " + eventId
+            );
+        }
+    }
 }
