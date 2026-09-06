@@ -11,7 +11,11 @@ spring:
       driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
 
   kafka:
     bootstrap-servers: localhost:9092
