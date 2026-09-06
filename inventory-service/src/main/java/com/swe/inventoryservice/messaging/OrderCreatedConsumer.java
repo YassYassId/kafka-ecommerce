@@ -1,6 +1,7 @@
 package com.swe.inventoryservice.messaging;
 
 import com.swe.inventoryservice.event.OrderCreatedEvent;
+import com.swe.inventoryservice.exception.InvalidEventException;
 import com.swe.inventoryservice.service.InventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,7 +36,7 @@ public class OrderCreatedConsumer {
                     payload,
                     e
             );
-            throw new IllegalStateException("Failed to deserialize OrderCreated event", e);
+            throw new InvalidEventException("Failed to deserialize OrderCreated event", e);
         }
     }
 }
