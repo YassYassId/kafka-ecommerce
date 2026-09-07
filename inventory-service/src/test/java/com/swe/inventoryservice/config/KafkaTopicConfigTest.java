@@ -20,4 +20,27 @@ class KafkaTopicConfigTest {
         assertThat(topic.numPartitions()).isEqualTo(3);
         assertThat(topic.replicationFactor()).isEqualTo((short) 1);
     }
+
+    @Test
+    @DisplayName("should configure inventory.reserved topic bean with 3 partitions and 1 replica")
+    void shouldCreateInventoryReservedTopicBean() {
+        NewTopic topic = topicConfig.inventoryReservedTopic();
+
+        assertThat(topic).isNotNull();
+        assertThat(topic.name()).isEqualTo(KafkaTopicConfig.INVENTORY_RESERVED_TOPIC);
+        assertThat(topic.numPartitions()).isEqualTo(3);
+        assertThat(topic.replicationFactor()).isEqualTo((short) 1);
+    }
+
+    @Test
+    @DisplayName("should configure inventory.rejected topic bean with 3 partitions and 1 replica")
+    void shouldCreateInventoryRejectedTopicBean() {
+        NewTopic topic = topicConfig.inventoryRejectedTopic();
+
+        assertThat(topic).isNotNull();
+        assertThat(topic.name()).isEqualTo(KafkaTopicConfig.INVENTORY_REJECTED_TOPIC);
+        assertThat(topic.numPartitions()).isEqualTo(3);
+        assertThat(topic.replicationFactor()).isEqualTo((short) 1);
+    }
 }
+

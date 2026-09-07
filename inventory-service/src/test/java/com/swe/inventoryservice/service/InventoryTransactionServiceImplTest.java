@@ -2,9 +2,12 @@ package com.swe.inventoryservice.service;
 
 import com.swe.inventoryservice.entity.InventoryItem;
 import com.swe.inventoryservice.entity.ProcessedEvent;
+import com.swe.inventoryservice.event.InventoryRejectedEvent;
+import com.swe.inventoryservice.event.InventoryReservedEvent;
 import com.swe.inventoryservice.event.OrderCreatedEvent;
 import com.swe.inventoryservice.event.OrderCreatedItem;
-import com.swe.inventoryservice.exception.InsufficientInventoryException;
+import com.swe.inventoryservice.outbox.OutboxEvent;
+import com.swe.inventoryservice.outbox.OutboxEventRepository;
 import com.swe.inventoryservice.repository.InventoryItemRepository;
 import com.swe.inventoryservice.repository.ProcessedEventRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -14,7 +17,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.List;
@@ -22,7 +27,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -34,6 +38,12 @@ class InventoryTransactionServiceImplTest {
 
     @Mock
     private ProcessedEventRepository processedEventRepository;
+
+    @Mock
+    private OutboxEventRepository outboxEventRepository;
+
+    @Spy
+    private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private InventoryTransactionServiceImpl inventoryTransactionService;
@@ -61,18 +71,20 @@ class InventoryTransactionServiceImplTest {
 
             verify(processedEventRepository).existsById(eventId);
             verifyNoInteractions(repository);
+            verifyNoInteractions(outboxEventRepository);
             verify(processedEventRepository, never()).save(any(ProcessedEvent.class));
         }
 
         @Test
-        @DisplayName("should successfully deduct available quantity and increase reserved quantity for single item")
+        @DisplayName("should successfully deduct available quantity, increase reserved quantity, and create InventoryReserved outbox event for single item")
         void shouldProcessOrderSuccessfullyForSingleItem() {
             UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
             UUID productId = UUID.randomUUID();
 
             OrderCreatedEvent event = new OrderCreatedEvent(
                     eventId,
-                    UUID.randomUUID(),
+                    orderId,
                     UUID.randomUUID(),
                     List.of(new OrderCreatedItem(productId, 3)),
                     Instant.now(),
@@ -95,6 +107,16 @@ class InventoryTransactionServiceImplTest {
             assertThat(inventoryItem.getAvailableQuantity()).isEqualTo(7);
             assertThat(inventoryItem.getReservedQuantity()).isEqualTo(5);
 
+            ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+            verify(outboxEventRepository).save(outboxCaptor.capture());
+
+            OutboxEvent savedOutbox = outboxCaptor.getValue();
+            assertThat(savedOutbox.getAggregateId()).isEqualTo(orderId);
+            assertThat(savedOutbox.getAggregateType()).isEqualTo("Order");
+            assertThat(savedOutbox.getEventType()).isEqualTo("InventoryReserved");
+            assertThat(savedOutbox.getEventVersion()).isEqualTo(1);
+            assertThat(savedOutbox.getPayload()).contains(orderId.toString());
+
             ArgumentCaptor<ProcessedEvent> eventCaptor = ArgumentCaptor.forClass(ProcessedEvent.class);
             verify(processedEventRepository).save(eventCaptor.capture());
 
@@ -104,15 +126,16 @@ class InventoryTransactionServiceImplTest {
         }
 
         @Test
-        @DisplayName("should successfully process order with multiple items")
+        @DisplayName("should successfully process order with multiple items and create InventoryReserved outbox event")
         void shouldProcessOrderWithMultipleItems() {
             UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
             UUID product1Id = UUID.randomUUID();
             UUID product2Id = UUID.randomUUID();
 
             OrderCreatedEvent event = new OrderCreatedEvent(
                     eventId,
-                    UUID.randomUUID(),
+                    orderId,
                     UUID.randomUUID(),
                     List.of(
                             new OrderCreatedItem(product1Id, 2),
@@ -150,18 +173,23 @@ class InventoryTransactionServiceImplTest {
             assertThat(item2.getAvailableQuantity()).isEqualTo(6);
             assertThat(item2.getReservedQuantity()).isEqualTo(5);
 
+            ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+            verify(outboxEventRepository).save(outboxCaptor.capture());
+            assertThat(outboxCaptor.getValue().getEventType()).isEqualTo("InventoryReserved");
+
             verify(processedEventRepository).save(any(ProcessedEvent.class));
         }
 
         @Test
-        @DisplayName("should throw IllegalArgumentException when product does not exist in inventory")
-        void shouldThrowExceptionWhenProductNotFound() {
+        @DisplayName("should create InventoryRejected outbox event when product does not exist in inventory")
+        void shouldRejectWhenProductNotFound() {
             UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
             UUID missingProductId = UUID.randomUUID();
 
             OrderCreatedEvent event = new OrderCreatedEvent(
                     eventId,
-                    UUID.randomUUID(),
+                    orderId,
                     UUID.randomUUID(),
                     List.of(new OrderCreatedItem(missingProductId, 1)),
                     Instant.now(),
@@ -171,22 +199,30 @@ class InventoryTransactionServiceImplTest {
             when(processedEventRepository.existsById(eventId)).thenReturn(false);
             when(repository.findByProductId(missingProductId)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> inventoryTransactionService.process(event))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessage("Inventory item not found for product: " + missingProductId);
+            inventoryTransactionService.process(event);
 
-            verify(processedEventRepository, never()).save(any(ProcessedEvent.class));
+            ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+            verify(outboxEventRepository).save(outboxCaptor.capture());
+
+            OutboxEvent savedOutbox = outboxCaptor.getValue();
+            assertThat(savedOutbox.getAggregateId()).isEqualTo(orderId);
+            assertThat(savedOutbox.getEventType()).isEqualTo("InventoryRejected");
+            assertThat(savedOutbox.getPayload()).contains("PRODUCT_NOT_FOUND");
+            assertThat(savedOutbox.getPayload()).contains(missingProductId.toString());
+
+            verify(processedEventRepository).save(any(ProcessedEvent.class));
         }
 
         @Test
-        @DisplayName("should throw InsufficientInventoryException when requested quantity exceeds available stock")
-        void shouldThrowExceptionWhenInsufficientInventory() {
+        @DisplayName("should create InventoryRejected outbox event when requested quantity exceeds available stock")
+        void shouldRejectWhenInsufficientInventory() {
             UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
             UUID productId = UUID.randomUUID();
 
             OrderCreatedEvent event = new OrderCreatedEvent(
                     eventId,
-                    UUID.randomUUID(),
+                    orderId,
                     UUID.randomUUID(),
                     List.of(new OrderCreatedItem(productId, 15)),
                     Instant.now(),
@@ -204,14 +240,21 @@ class InventoryTransactionServiceImplTest {
             when(processedEventRepository.existsById(eventId)).thenReturn(false);
             when(repository.findByProductId(productId)).thenReturn(Optional.of(inventoryItem));
 
-            assertThatThrownBy(() -> inventoryTransactionService.process(event))
-                    .isInstanceOf(InsufficientInventoryException.class)
-                    .hasMessage("Insufficient inventory for product: " + productId);
+            inventoryTransactionService.process(event);
 
             // Verify quantities were not changed
             assertThat(inventoryItem.getAvailableQuantity()).isEqualTo(10);
             assertThat(inventoryItem.getReservedQuantity()).isEqualTo(0);
-            verify(processedEventRepository, never()).save(any(ProcessedEvent.class));
+
+            ArgumentCaptor<OutboxEvent> outboxCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+            verify(outboxEventRepository).save(outboxCaptor.capture());
+
+            OutboxEvent savedOutbox = outboxCaptor.getValue();
+            assertThat(savedOutbox.getAggregateId()).isEqualTo(orderId);
+            assertThat(savedOutbox.getEventType()).isEqualTo("InventoryRejected");
+            assertThat(savedOutbox.getPayload()).contains("INSUFFICIENT_STOCK");
+
+            verify(processedEventRepository).save(any(ProcessedEvent.class));
         }
     }
 }
