@@ -6,6 +6,8 @@ import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.Order;
 import com.swe.ordersservice.entity.OrderItem;
 import com.swe.ordersservice.entity.OrderStatus;
+import com.swe.ordersservice.entity.ProcessedEvent;
+import com.swe.ordersservice.event.InventoryReservedEvent;
 import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.event.OrderCreatedItem;
 import com.swe.ordersservice.exception.OrderNotFoundException;
@@ -13,11 +15,13 @@ import com.swe.ordersservice.outbox.OutboxEvent;
 import com.swe.ordersservice.outbox.OutboxEventFactory;
 import com.swe.ordersservice.outbox.OutboxEventRepository;
 import com.swe.ordersservice.repository.OrderRepository;
+import com.swe.ordersservice.repository.ProcessedEventRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @Service
@@ -27,6 +31,7 @@ public class OrderServiceImpl implements OrderService {
     private final OrderRepository orderRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxEventFactory outboxEventFactory;
+    private final ProcessedEventRepository processedEventRepository;
 
     @Override
     @Transactional
@@ -89,5 +94,28 @@ public class OrderServiceImpl implements OrderService {
                 order.getId(),
                 order.getStatus()
         );
+    }
+
+    @Override
+    @Transactional
+    public void confirmOrder(InventoryReservedEvent event) {
+
+        if (processedEventRepository.existsById(event.eventId())) {
+            return;
+        }
+
+        Order order = orderRepository.findById(event.orderId())
+                .orElseThrow(() -> new OrderNotFoundException(event.orderId()));
+
+        if (order.getStatus() != OrderStatus.PENDING) {
+            throw new IllegalStateException("Order: " + order.getId() + " cannot be confirmed from status: " + order.getStatus());
+        }
+
+        order.setStatus(OrderStatus.CONFIRMED);
+        
+        processedEventRepository.save(ProcessedEvent.builder()
+                .eventId(event.eventId())
+                .processedAt(OffsetDateTime.now())
+                .build());
     }
 }
