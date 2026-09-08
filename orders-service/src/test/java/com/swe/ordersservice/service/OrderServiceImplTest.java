@@ -5,12 +5,15 @@ import com.swe.ordersservice.dto.OrderRequest;
 import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.Order;
 import com.swe.ordersservice.entity.OrderStatus;
+import com.swe.ordersservice.entity.ProcessedEvent;
+import com.swe.ordersservice.event.InventoryReservedEvent;
 import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.exception.OrderNotFoundException;
 import com.swe.ordersservice.outbox.OutboxEvent;
 import com.swe.ordersservice.outbox.OutboxEventFactory;
 import com.swe.ordersservice.outbox.OutboxEventRepository;
 import com.swe.ordersservice.repository.OrderRepository;
+import com.swe.ordersservice.repository.ProcessedEventRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -20,6 +23,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -41,6 +45,9 @@ class OrderServiceImplTest {
 
     @Mock
     private OutboxEventFactory outboxEventFactory;
+
+    @Mock
+    private ProcessedEventRepository processedEventRepository;
 
     @InjectMocks
     private OrderServiceImpl orderService;
@@ -251,6 +258,106 @@ class OrderServiceImplTest {
                     .hasMessage("Order not found with ID: " + nonExistentOrderId);
 
             verify(orderRepository).findById(nonExistentOrderId);
+        }
+    }
+
+    @Nested
+    @DisplayName("confirmOrder")
+    class ConfirmOrderTests {
+
+        @Test
+        @DisplayName("should transition order from PENDING to CONFIRMED and record processed event")
+        void shouldConfirmOrderSuccessfullyWhenStatusIsPending() {
+            // Arrange
+            UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
+            InventoryReservedEvent event = new InventoryReservedEvent(eventId, orderId, Instant.now(), 1);
+
+            Order pendingOrder = Order.builder()
+                    .id(orderId)
+                    .customerId(UUID.randomUUID())
+                    .status(OrderStatus.PENDING)
+                    .build();
+
+            when(processedEventRepository.existsById(eventId)).thenReturn(false);
+            when(orderRepository.findById(orderId)).thenReturn(Optional.of(pendingOrder));
+
+            // Act
+            orderService.confirmOrder(event);
+
+            // Assert
+            assertThat(pendingOrder.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+
+            ArgumentCaptor<ProcessedEvent> captor = ArgumentCaptor.forClass(ProcessedEvent.class);
+            verify(processedEventRepository).save(captor.capture());
+
+            ProcessedEvent capturedEvent = captor.getValue();
+            assertThat(capturedEvent.getEventId()).isEqualTo(eventId);
+            assertThat(capturedEvent.getProcessedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("should skip processing when event has already been processed (idempotency)")
+        void shouldSkipProcessingWhenEventAlreadyProcessed() {
+            // Arrange
+            UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
+            InventoryReservedEvent event = new InventoryReservedEvent(eventId, orderId, Instant.now(), 1);
+
+            when(processedEventRepository.existsById(eventId)).thenReturn(true);
+
+            // Act
+            orderService.confirmOrder(event);
+
+            // Assert
+            verify(processedEventRepository).existsById(eventId);
+            verifyNoMoreInteractions(processedEventRepository);
+            verifyNoInteractions(orderRepository);
+        }
+
+        @Test
+        @DisplayName("should throw OrderNotFoundException when order does not exist")
+        void shouldThrowOrderNotFoundExceptionWhenOrderDoesNotExist() {
+            // Arrange
+            UUID eventId = UUID.randomUUID();
+            UUID nonExistentOrderId = UUID.randomUUID();
+            InventoryReservedEvent event = new InventoryReservedEvent(eventId, nonExistentOrderId, Instant.now(), 1);
+
+            when(processedEventRepository.existsById(eventId)).thenReturn(false);
+            when(orderRepository.findById(nonExistentOrderId)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThatThrownBy(() -> orderService.confirmOrder(event))
+                    .isInstanceOf(OrderNotFoundException.class)
+                    .hasMessage("Order not found with ID: " + nonExistentOrderId);
+
+            verify(orderRepository).findById(nonExistentOrderId);
+            verify(processedEventRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should throw IllegalStateException when order status is not PENDING")
+        void shouldThrowIllegalStateExceptionWhenOrderStatusIsNotPending() {
+            // Arrange
+            UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
+            InventoryReservedEvent event = new InventoryReservedEvent(eventId, orderId, Instant.now(), 1);
+
+            Order confirmedOrder = Order.builder()
+                    .id(orderId)
+                    .customerId(UUID.randomUUID())
+                    .status(OrderStatus.CONFIRMED)
+                    .build();
+
+            when(processedEventRepository.existsById(eventId)).thenReturn(false);
+            when(orderRepository.findById(orderId)).thenReturn(Optional.of(confirmedOrder));
+
+            // Act & Assert
+            assertThatThrownBy(() -> orderService.confirmOrder(event))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("cannot be confirmed from status: CONFIRMED");
+
+            verify(processedEventRepository, never()).save(any());
         }
     }
 }
