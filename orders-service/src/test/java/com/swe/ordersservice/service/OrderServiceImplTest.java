@@ -6,6 +6,7 @@ import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.Order;
 import com.swe.ordersservice.entity.OrderStatus;
 import com.swe.ordersservice.entity.ProcessedEvent;
+import com.swe.ordersservice.event.InventoryRejectedEvent;
 import com.swe.ordersservice.event.InventoryReservedEvent;
 import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.exception.OrderNotFoundException;
@@ -355,7 +356,115 @@ class OrderServiceImplTest {
             // Act & Assert
             assertThatThrownBy(() -> orderService.confirmOrder(event))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("cannot be confirmed from status: CONFIRMED");
+                    .hasMessageContaining("cannot transition from CONFIRMED to CONFIRMED");
+
+            verify(processedEventRepository, never()).save(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("cancelOrder")
+    class CancelOrderTests {
+
+        @Test
+        @DisplayName("should transition order from PENDING to CANCELLED and record processed event")
+        void shouldCancelOrderSuccessfullyWhenStatusIsPending() {
+            // Arrange
+            UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
+            InventoryRejectedEvent event = new InventoryRejectedEvent(
+                    eventId, orderId, UUID.randomUUID(), 2, 0, "INSUFFICIENT_STOCK", Instant.now(), 1
+            );
+
+            Order pendingOrder = Order.builder()
+                    .id(orderId)
+                    .customerId(UUID.randomUUID())
+                    .status(OrderStatus.PENDING)
+                    .build();
+
+            when(processedEventRepository.existsById(eventId)).thenReturn(false);
+            when(orderRepository.findById(orderId)).thenReturn(Optional.of(pendingOrder));
+
+            // Act
+            orderService.cancelOrder(event);
+
+            // Assert
+            assertThat(pendingOrder.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+
+            ArgumentCaptor<ProcessedEvent> captor = ArgumentCaptor.forClass(ProcessedEvent.class);
+            verify(processedEventRepository).save(captor.capture());
+
+            ProcessedEvent capturedEvent = captor.getValue();
+            assertThat(capturedEvent.getEventId()).isEqualTo(eventId);
+            assertThat(capturedEvent.getProcessedAt()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("should skip processing when event has already been processed (idempotency)")
+        void shouldSkipProcessingWhenEventAlreadyProcessed() {
+            // Arrange
+            UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
+            InventoryRejectedEvent event = new InventoryRejectedEvent(
+                    eventId, orderId, UUID.randomUUID(), 2, 0, "INSUFFICIENT_STOCK", Instant.now(), 1
+            );
+
+            when(processedEventRepository.existsById(eventId)).thenReturn(true);
+
+            // Act
+            orderService.cancelOrder(event);
+
+            // Assert
+            verify(processedEventRepository).existsById(eventId);
+            verifyNoMoreInteractions(processedEventRepository);
+            verifyNoInteractions(orderRepository);
+        }
+
+        @Test
+        @DisplayName("should throw OrderNotFoundException when order does not exist")
+        void shouldThrowOrderNotFoundExceptionWhenOrderDoesNotExist() {
+            // Arrange
+            UUID eventId = UUID.randomUUID();
+            UUID nonExistentOrderId = UUID.randomUUID();
+            InventoryRejectedEvent event = new InventoryRejectedEvent(
+                    eventId, nonExistentOrderId, UUID.randomUUID(), 2, 0, "INSUFFICIENT_STOCK", Instant.now(), 1
+            );
+
+            when(processedEventRepository.existsById(eventId)).thenReturn(false);
+            when(orderRepository.findById(nonExistentOrderId)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThatThrownBy(() -> orderService.cancelOrder(event))
+                    .isInstanceOf(OrderNotFoundException.class)
+                    .hasMessage("Order not found with ID: " + nonExistentOrderId);
+
+            verify(orderRepository).findById(nonExistentOrderId);
+            verify(processedEventRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should throw IllegalStateException when order status is not PENDING")
+        void shouldThrowIllegalStateExceptionWhenOrderStatusIsNotPending() {
+            // Arrange
+            UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
+            InventoryRejectedEvent event = new InventoryRejectedEvent(
+                    eventId, orderId, UUID.randomUUID(), 2, 0, "INSUFFICIENT_STOCK", Instant.now(), 1
+            );
+
+            Order cancelledOrder = Order.builder()
+                    .id(orderId)
+                    .customerId(UUID.randomUUID())
+                    .status(OrderStatus.CANCELLED)
+                    .build();
+
+            when(processedEventRepository.existsById(eventId)).thenReturn(false);
+            when(orderRepository.findById(orderId)).thenReturn(Optional.of(cancelledOrder));
+
+            // Act & Assert
+            assertThatThrownBy(() -> orderService.cancelOrder(event))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("cannot transition from CANCELLED to CANCELLED");
 
             verify(processedEventRepository, never()).save(any());
         }
