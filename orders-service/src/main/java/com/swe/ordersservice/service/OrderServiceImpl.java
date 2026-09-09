@@ -7,6 +7,7 @@ import com.swe.ordersservice.entity.Order;
 import com.swe.ordersservice.entity.OrderItem;
 import com.swe.ordersservice.entity.OrderStatus;
 import com.swe.ordersservice.entity.ProcessedEvent;
+import com.swe.ordersservice.event.InventoryRejectedEvent;
 import com.swe.ordersservice.event.InventoryReservedEvent;
 import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.event.OrderCreatedItem;
@@ -99,22 +100,37 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public void confirmOrder(InventoryReservedEvent event) {
+        updateOrderStatus(event.eventId(), event.orderId(), OrderStatus.CONFIRMED);
+    }
 
-        if (processedEventRepository.existsById(event.eventId())) {
+    @Override
+    @Transactional
+    public void cancelOrder(InventoryRejectedEvent event) {
+        updateOrderStatus(event.eventId(), event.orderId(), OrderStatus.CANCELLED);
+    }
+
+    private void updateOrderStatus(UUID eventId, UUID orderId, OrderStatus targetStatus) {
+        // Check if the event has already been processed (idempotency)
+        if (processedEventRepository.existsById(eventId)) {
             return;
         }
 
-        Order order = orderRepository.findById(event.orderId())
-                .orElseThrow(() -> new OrderNotFoundException(event.orderId()));
+        // Fetch the order
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
 
+        // Check if the order is in the expected status
         if (order.getStatus() != OrderStatus.PENDING) {
-            throw new IllegalStateException("Order: " + order.getId() + " cannot be confirmed from status: " + order.getStatus());
+            throw new IllegalStateException("Order " + order.getId()
+                    + " cannot transition from " + order.getStatus() + " to " + targetStatus);
         }
 
-        order.setStatus(OrderStatus.CONFIRMED);
-        
+        // Update the order status
+        order.setStatus(targetStatus);
+
+        // Save the order
         processedEventRepository.save(ProcessedEvent.builder()
-                .eventId(event.eventId())
+                .eventId(eventId)
                 .processedAt(OffsetDateTime.now())
                 .build());
     }
