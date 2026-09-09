@@ -60,7 +60,7 @@ class InventoryReservedConsumerTest {
             assertThat(capturedEvent.eventId()).isEqualTo(eventId);
             assertThat(capturedEvent.orderId()).isEqualTo(orderId);
             assertThat(capturedEvent.version()).isEqualTo(1);
-            assertThat(capturedEvent.occuredAt()).isNotNull();
+            assertThat(capturedEvent.occurredAt()).isNotNull();
         }
 
         @Test
