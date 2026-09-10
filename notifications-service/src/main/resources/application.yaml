@@ -9,3 +9,10 @@ spring:
       username: notifications_user
       password: notifications_password
       driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
