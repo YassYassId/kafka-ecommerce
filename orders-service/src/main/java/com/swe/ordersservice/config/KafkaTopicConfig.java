@@ -12,6 +12,10 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class KafkaTopicConfig {
     public static final String ORDER_CREATED_TOPIC = "order.created";
+    public static final String INVENTORY_RESERVED_TOPIC = "inventory.reserved";
+    public static final String INVENTORY_REJECTED_TOPIC = "inventory.rejected";
+    public static final String INVENTORY_RESERVED_DLT = "inventory.reserved.dlt";
+    public static final String INVENTORY_REJECTED_DLT = "inventory.rejected.dlt";
 
     @Bean
     public NewTopic orderCreatedTopic() {
@@ -21,4 +25,23 @@ public class KafkaTopicConfig {
                 (short) 1
         );
     }
+
+    @Bean
+    public NewTopic inventoryReservedDltTopic() {
+        return new NewTopic(
+                INVENTORY_RESERVED_DLT,
+                3,
+                (short) 1
+        );
+    }
+
+    @Bean
+    public NewTopic inventoryRejectedDltTopic() {
+        return new NewTopic(
+                INVENTORY_REJECTED_DLT,
+                3,
+                (short) 1
+        );
+    }
 }
+

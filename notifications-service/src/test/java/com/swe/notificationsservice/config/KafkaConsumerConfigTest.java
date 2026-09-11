@@ -1,7 +1,6 @@
-package com.swe.inventoryservice.config;
+package com.swe.notificationsservice.config;
 
-import com.swe.inventoryservice.exception.InsufficientInventoryException;
-import com.swe.inventoryservice.exception.InvalidEventException;
+import com.swe.notificationsservice.exception.InvalidEventException;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.DisplayName;
@@ -17,8 +16,6 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.util.backoff.BackOff;
 import org.springframework.util.backoff.FixedBackOff;
 
-import java.lang.reflect.Method;
-import java.util.UUID;
 import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,7 +51,7 @@ class KafkaConsumerConfigTest {
         }
 
         @Test
-        @DisplayName("should classify non-retryable exceptions (InsufficientInventoryException, InvalidEventException)")
+        @DisplayName("should classify non-retryable exceptions (InvalidEventException)")
         @SuppressWarnings("unchecked")
         void shouldClassifyNonRetryableExceptions() {
             DefaultErrorHandler errorHandler = consumerConfig.kafkaErrorHandler(kafkaTemplate);
@@ -68,14 +65,13 @@ class KafkaConsumerConfigTest {
 
             assertThat(entries).isNotNull();
             assertThat(entries.get(InvalidEventException.class)).isFalse();
-            assertThat(entries.get(InsufficientInventoryException.class)).isFalse();
         }
 
 
         @Test
-        @DisplayName("should route failed messages to order.created.dlt preserving partition number")
+        @DisplayName("should route failed inventory.reserved messages to inventory.reserved.notifications.dlt preserving partition number")
         @SuppressWarnings("unchecked")
-        void shouldRouteFailedMessagesToDltTopicPreservingPartition() {
+        void shouldRouteInventoryReservedToDltPreservingPartition() {
             DefaultErrorHandler errorHandler = consumerConfig.kafkaErrorHandler(kafkaTemplate);
 
             Object failureTracker = ReflectionTestUtils.getField(errorHandler, "failureTracker");
@@ -89,10 +85,34 @@ class KafkaConsumerConfigTest {
                             ReflectionTestUtils.getField(recoverer, "destinationResolver");
             assertThat(destinationResolver).isNotNull();
 
-            ConsumerRecord<String, String> record = new ConsumerRecord<>("order.created", 2, 100L, "key-1", "payload-1");
+            ConsumerRecord<String, String> record = new ConsumerRecord<>("inventory.reserved", 1, 100L, "key-1", "payload-1");
             TopicPartition targetPartition = destinationResolver.apply(record, new RuntimeException("processing failed"));
 
-            assertThat(targetPartition.topic()).isEqualTo(KafkaTopicConfig.ORDER_CREATED_DLT);
+            assertThat(targetPartition.topic()).isEqualTo(KafkaTopicConfig.INVENTORY_RESERVED_NOTIFICATIONS_DLT);
+            assertThat(targetPartition.partition()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("should route failed inventory.rejected messages to inventory.rejected.notifications.dlt preserving partition number")
+        @SuppressWarnings("unchecked")
+        void shouldRouteInventoryRejectedToDltPreservingPartition() {
+            DefaultErrorHandler errorHandler = consumerConfig.kafkaErrorHandler(kafkaTemplate);
+
+            Object failureTracker = ReflectionTestUtils.getField(errorHandler, "failureTracker");
+            assertThat(failureTracker).isNotNull();
+
+            DeadLetterPublishingRecoverer recoverer = (DeadLetterPublishingRecoverer) ReflectionTestUtils.getField(failureTracker, "recoverer");
+            assertThat(recoverer).isNotNull();
+
+            BiFunction<ConsumerRecord<?, ?>, Exception, TopicPartition> destinationResolver =
+                    (BiFunction<ConsumerRecord<?, ?>, Exception, TopicPartition>)
+                            ReflectionTestUtils.getField(recoverer, "destinationResolver");
+            assertThat(destinationResolver).isNotNull();
+
+            ConsumerRecord<String, String> record = new ConsumerRecord<>("inventory.rejected", 2, 200L, "key-2", "payload-2");
+            TopicPartition targetPartition = destinationResolver.apply(record, new RuntimeException("processing failed"));
+
+            assertThat(targetPartition.topic()).isEqualTo(KafkaTopicConfig.INVENTORY_REJECTED_NOTIFICATIONS_DLT);
             assertThat(targetPartition.partition()).isEqualTo(2);
         }
     }

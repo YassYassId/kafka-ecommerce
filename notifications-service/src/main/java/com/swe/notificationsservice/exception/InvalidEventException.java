@@ -1,4 +1,4 @@
-package com.swe.inventoryservice.exception;
+package com.swe.notificationsservice.exception;
 
 public class InvalidEventException extends RuntimeException {
 
@@ -10,4 +10,3 @@ public class InvalidEventException extends RuntimeException {
         super(message, cause);
     }
 }
-

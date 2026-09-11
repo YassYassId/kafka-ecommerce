@@ -23,4 +23,33 @@ class KafkaTopicConfigTest {
         assertThat(topic.numPartitions()).isEqualTo(3);
         assertThat(topic.replicationFactor()).isEqualTo((short) 1);
     }
+
+    @Test
+    @DisplayName("should configure inventory.reserved.dlt topic bean with 3 partitions and 1 replica")
+    void shouldCreateInventoryReservedDltTopicBean() {
+        // Act
+        NewTopic topic = kafkaTopicConfig.inventoryReservedDltTopic();
+
+        // Assert
+        assertThat(topic).isNotNull();
+        assertThat(topic.name()).isEqualTo(KafkaTopicConfig.INVENTORY_RESERVED_DLT);
+        assertThat(topic.name()).isEqualTo("inventory.reserved.dlt");
+        assertThat(topic.numPartitions()).isEqualTo(3);
+        assertThat(topic.replicationFactor()).isEqualTo((short) 1);
+    }
+
+    @Test
+    @DisplayName("should configure inventory.rejected.dlt topic bean with 3 partitions and 1 replica")
+    void shouldCreateInventoryRejectedDltTopicBean() {
+        // Act
+        NewTopic topic = kafkaTopicConfig.inventoryRejectedDltTopic();
+
+        // Assert
+        assertThat(topic).isNotNull();
+        assertThat(topic.name()).isEqualTo(KafkaTopicConfig.INVENTORY_REJECTED_DLT);
+        assertThat(topic.name()).isEqualTo("inventory.rejected.dlt");
+        assertThat(topic.numPartitions()).isEqualTo(3);
+        assertThat(topic.replicationFactor()).isEqualTo((short) 1);
+    }
 }
+

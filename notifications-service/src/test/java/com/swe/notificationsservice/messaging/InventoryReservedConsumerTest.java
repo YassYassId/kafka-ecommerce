@@ -1,6 +1,7 @@
 package com.swe.notificationsservice.messaging;
 
 import com.swe.notificationsservice.event.InventoryReservedEvent;
+import com.swe.notificationsservice.exception.InvalidEventException;
 import com.swe.notificationsservice.service.NotificationService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -64,15 +65,16 @@ class InventoryReservedConsumerTest {
         }
 
         @Test
-        @DisplayName("should throw IllegalStateException when payload is malformed JSON")
-        void shouldThrowIllegalStateExceptionWhenJsonIsMalformed() {
+        @DisplayName("should throw InvalidEventException when payload is malformed JSON")
+        void shouldThrowInvalidEventExceptionWhenJsonIsMalformed() {
             String malformedPayload = "{ invalid json content }";
 
             assertThatThrownBy(() -> consumer.consume("test-key", malformedPayload))
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOf(InvalidEventException.class)
                     .hasMessageContaining("Failed to process InventoryReserved event");
 
             verifyNoInteractions(notificationService);
         }
     }
 }
+

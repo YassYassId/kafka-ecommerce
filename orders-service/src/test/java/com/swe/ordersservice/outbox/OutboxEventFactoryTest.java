@@ -2,6 +2,7 @@ package com.swe.ordersservice.outbox;
 
 import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.event.OrderCreatedItem;
+import com.swe.ordersservice.exception.InvalidEventException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -68,8 +69,8 @@ class OutboxEventFactoryTest {
     }
 
     @Test
-    @DisplayName("should throw IllegalStateException when JSON serialization fails")
-    void create_WhenSerializationFails_ShouldThrowIllegalStateException() {
+    @DisplayName("should throw InvalidEventException when JSON serialization fails")
+    void create_WhenSerializationFails_ShouldThrowInvalidEventException() {
         // Arrange
         OrderCreatedEvent event = new OrderCreatedEvent(
                 UUID.randomUUID(),
@@ -85,8 +86,9 @@ class OutboxEventFactoryTest {
 
         // Act & Assert
         assertThatThrownBy(() -> outboxEventFactory.create(event))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(InvalidEventException.class)
                 .hasMessage("Failed to serialize OrderCreatedEvent")
                 .hasCauseInstanceOf(JacksonException.class);
     }
 }
+

@@ -1,6 +1,7 @@
 package com.swe.ordersservice.outbox;
 
 import com.swe.ordersservice.event.OrderCreatedEvent;
+import com.swe.ordersservice.exception.InvalidEventException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
@@ -29,7 +30,7 @@ public class OutboxEventFactory {
                     .build();
 
         } catch (JacksonException e) {
-            throw new IllegalStateException(
+            throw new InvalidEventException(
                     "Failed to serialize OrderCreatedEvent",
                     e
             );

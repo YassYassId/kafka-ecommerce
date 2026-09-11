@@ -1,6 +1,7 @@
 package com.swe.notificationsservice.messaging;
 
 import com.swe.notificationsservice.event.InventoryReservedEvent;
+import com.swe.notificationsservice.exception.InvalidEventException;
 import com.swe.notificationsservice.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,8 +28,9 @@ public class InventoryReservedConsumer {
             notificationService.handleInventoryReservedEvent(event);
         } catch (JacksonException e) {
             log.error("Error processing InventoryReserved event. key={}, payload={}, error={}", key, payload, e.getMessage(), e);
-            throw new IllegalStateException("Failed to process InventoryReserved event", e);
+            throw new InvalidEventException("Failed to process InventoryReserved event", e);
 
         }
     }
 }
+

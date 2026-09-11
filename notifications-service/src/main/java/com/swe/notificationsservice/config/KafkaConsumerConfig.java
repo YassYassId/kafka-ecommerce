@@ -1,7 +1,6 @@
-package com.swe.inventoryservice.config;
+package com.swe.notificationsservice.config;
 
-import com.swe.inventoryservice.exception.InsufficientInventoryException;
-import com.swe.inventoryservice.exception.InvalidEventException;
+import com.swe.notificationsservice.exception.InvalidEventException;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,10 +18,14 @@ public class KafkaConsumerConfig {
 
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(
                 kafkaTemplate,
-                (record, exception) ->
-                        new TopicPartition(
-                                KafkaTopicConfig.ORDER_CREATED_DLT,
-                                record.partition())
+                (record, exception) -> {
+                    String dltTopic = switch (record.topic()) {
+                        case KafkaTopicConfig.INVENTORY_RESERVED_TOPIC -> KafkaTopicConfig.INVENTORY_RESERVED_NOTIFICATIONS_DLT;
+                        case KafkaTopicConfig.INVENTORY_REJECTED_TOPIC -> KafkaTopicConfig.INVENTORY_REJECTED_NOTIFICATIONS_DLT;
+                        default -> record.topic() + ".notifications.dlt";
+                    };
+                    return new TopicPartition(dltTopic, record.partition());
+                }
         );
 
         // Retry twice with 2 seconds interval
@@ -30,10 +33,10 @@ public class KafkaConsumerConfig {
 
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, fixedBackOff);
         errorHandler.addNotRetryableExceptions(
-                InsufficientInventoryException.class,
-                InvalidEventException.class);
+                InvalidEventException.class
+        );
 
         return errorHandler;
-
     }
 }
+

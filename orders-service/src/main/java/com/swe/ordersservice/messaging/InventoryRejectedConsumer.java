@@ -1,6 +1,7 @@
 package com.swe.ordersservice.messaging;
 
 import com.swe.ordersservice.event.InventoryRejectedEvent;
+import com.swe.ordersservice.exception.InvalidEventException;
 import com.swe.ordersservice.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,7 +28,8 @@ public class InventoryRejectedConsumer {
             orderService.cancelOrder(event);
         } catch (JacksonException e) {
             log.error("Error occurred while processing InventoryRejected event", e);
-            throw new IllegalStateException("Failed to deserialize InventoryRejected event", e);
+            throw new InvalidEventException("Failed to deserialize InventoryRejected event", e);
         }
     }
 }
+

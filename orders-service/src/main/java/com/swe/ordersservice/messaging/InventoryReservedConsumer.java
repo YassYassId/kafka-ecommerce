@@ -1,6 +1,7 @@
 package com.swe.ordersservice.messaging;
 
 import com.swe.ordersservice.event.InventoryReservedEvent;
+import com.swe.ordersservice.exception.InvalidEventException;
 import com.swe.ordersservice.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,7 +27,9 @@ public class InventoryReservedConsumer {
 
             orderService.confirmOrder(event);
         } catch (JacksonException e) {
-            throw new IllegalStateException("Failed to deserialize InventoryReserved event", e);
+            log.error("Failed to deserialize InventoryReserved event. payload={}", payload, e);
+            throw new InvalidEventException("Failed to deserialize InventoryReserved event", e);
         }
     }
 }
+

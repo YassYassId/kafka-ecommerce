@@ -1,6 +1,7 @@
 package com.swe.ordersservice.messaging;
 
 import com.swe.ordersservice.event.InventoryRejectedEvent;
+import com.swe.ordersservice.exception.InvalidEventException;
 import com.swe.ordersservice.service.OrderService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -73,15 +74,16 @@ class InventoryRejectedConsumerTest {
         }
 
         @Test
-        @DisplayName("should throw IllegalStateException when payload is malformed JSON")
-        void shouldThrowIllegalStateExceptionWhenJsonIsMalformed() {
+        @DisplayName("should throw InvalidEventException when payload is malformed JSON")
+        void shouldThrowInvalidEventExceptionWhenJsonIsMalformed() {
             String malformedPayload = "{ invalid json content }";
 
             assertThatThrownBy(() -> consumer.consume("test-key", malformedPayload))
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOf(InvalidEventException.class)
                     .hasMessageContaining("Failed to deserialize InventoryRejected event");
 
             verifyNoInteractions(orderService);
         }
     }
 }
+

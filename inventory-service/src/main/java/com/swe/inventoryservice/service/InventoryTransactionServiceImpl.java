@@ -6,7 +6,9 @@ import com.swe.inventoryservice.event.InventoryRejectedEvent;
 import com.swe.inventoryservice.event.InventoryReservedEvent;
 import com.swe.inventoryservice.event.OrderCreatedEvent;
 import com.swe.inventoryservice.event.OrderCreatedItem;
+import com.swe.inventoryservice.exception.InvalidEventException;
 import com.swe.inventoryservice.outbox.OutboxEvent;
+
 import com.swe.inventoryservice.outbox.OutboxEventRepository;
 import com.swe.inventoryservice.repository.InventoryItemRepository;
 import com.swe.inventoryservice.repository.ProcessedEventRepository;
@@ -120,8 +122,9 @@ public class InventoryTransactionServiceImpl implements InventoryTransactionServ
             outboxEventRepository.save(outboxEvent);
 
         } catch (JacksonException e) {
-            throw new IllegalStateException("Failed to serialize inventory event", e);
+            throw new InvalidEventException("Failed to serialize inventory event", e);
         }
+
     }
 
     private void markAsProcessed(OrderCreatedEvent event) {
