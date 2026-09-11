@@ -192,30 +192,123 @@ class KafkaRetryStrategyTest {
     }
 
     @Nested
-    @DisplayName("4. Duplicate Event After Retry/Replay")
-    class DuplicateEventIdempotencyTests {
+    @DisplayName("4. Restart and Replay Scenarios")
+    class RestartAndReplayTests {
 
         @Test
-        @DisplayName("Scenario 4: Duplicate event delivered -> Idempotency prevents duplicate side effects")
-        void shouldPreventDuplicateProcessingWhenEventAlreadyProcessed() {
+        @DisplayName("Scenario A: Normal restart -> Stop consumer, publish another event, restart consumer, new event gets processed")
+        void shouldProcessNewEventAfterConsumerRestart() throws Exception {
+            OrderCreatedConsumer orderCreatedConsumer = new OrderCreatedConsumer(inventoryService, objectMapper);
+
+            UUID orderId1 = UUID.randomUUID();
+            OrderCreatedEvent event1 = new OrderCreatedEvent(
+                    UUID.randomUUID(), orderId1, UUID.randomUUID(),
+                    List.of(new OrderCreatedItem(UUID.randomUUID(), 2)),
+                    Instant.now(), 1
+            );
+            String payload1 = objectMapper.writeValueAsString(event1);
+
+            // 1. Process event 1 while consumer is running
+            when(container.isRunning()).thenReturn(true);
+            orderCreatedConsumer.consume(orderId1.toString(), payload1);
+            verify(inventoryService, times(1)).processOrder(any(OrderCreatedEvent.class));
+
+            // 2. Stop consumer container (simulating planned maintenance / restart)
+            container.stop();
+            when(container.isRunning()).thenReturn(false);
+            assertThat(container.isRunning()).isFalse();
+
+            // 3. Restart consumer container
+            container.start();
+            when(container.isRunning()).thenReturn(true);
+            assertThat(container.isRunning()).isTrue();
+
+            // 4. Publish another event -> New event gets processed successfully
+            UUID orderId2 = UUID.randomUUID();
+            OrderCreatedEvent event2 = new OrderCreatedEvent(
+                    UUID.randomUUID(), orderId2, UUID.randomUUID(),
+                    List.of(new OrderCreatedItem(UUID.randomUUID(), 5)),
+                    Instant.now(), 1
+            );
+            String payload2 = objectMapper.writeValueAsString(event2);
+
+            orderCreatedConsumer.consume(orderId2.toString(), payload2);
+            verify(inventoryService, times(2)).processOrder(any(OrderCreatedEvent.class));
+        }
+
+        @Test
+        @DisplayName("Scenario B: Restart before offset commit / redelivery -> Same event delivered again, processed_events prevents duplicate side effect")
+        void shouldPreventDuplicateSideEffectWhenRestartBeforeOffsetCommitOccurs() {
             InventoryTransactionServiceImpl transactionService = new InventoryTransactionServiceImpl(
                     inventoryItemRepository, processedEventRepository, outboxEventRepository, objectMapper
             );
 
             UUID eventId = UUID.randomUUID();
             UUID orderId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+
             OrderCreatedEvent event = new OrderCreatedEvent(
                     eventId, orderId, UUID.randomUUID(),
-                    List.of(new OrderCreatedItem(UUID.randomUUID(), 3)),
+                    List.of(new OrderCreatedItem(productId, 2)),
                     Instant.now(), 1
             );
 
-            // Simulating event already processed in earlier attempt
+            InventoryItem item = InventoryItem.builder()
+                    .id(UUID.randomUUID())
+                    .productId(productId)
+                    .availableQuantity(10)
+                    .reservedQuantity(0)
+                    .version(0L)
+                    .build();
+
+            // First delivery: Event is processed successfully
+            when(processedEventRepository.existsById(eventId)).thenReturn(false);
+            when(inventoryItemRepository.findByProductId(productId)).thenReturn(Optional.of(item));
+
+            transactionService.process(event);
+
+            assertThat(item.getAvailableQuantity()).isEqualTo(8);
+            assertThat(item.getReservedQuantity()).isEqualTo(2);
+            verify(outboxEventRepository, times(1)).save(any(OutboxEvent.class));
+            verify(processedEventRepository, times(1)).save(any(ProcessedEvent.class));
+
+            // Crash / Restart before offset commit happens: Kafka redelivers the EXACT same event
+            // Now processedEventRepository has the event recorded
             when(processedEventRepository.existsById(eventId)).thenReturn(true);
 
             transactionService.process(event);
 
-            // Idempotency check prevents any changes
+            // Assert: Stock quantities remain exactly 8 and 2 (no double deduction)
+            assertThat(item.getAvailableQuantity()).isEqualTo(8);
+            assertThat(item.getReservedQuantity()).isEqualTo(2);
+            // Assert: No additional outbox events or processed events saved
+            verify(outboxEventRepository, times(1)).save(any(OutboxEvent.class));
+            verify(processedEventRepository, times(1)).save(any(ProcessedEvent.class));
+        }
+
+        @Test
+        @DisplayName("Scenario C: Manual replay -> Republish an already processed event with same eventId -> No duplicate stock reservation, no extra outbox event")
+        void shouldPreventDuplicateReservationOnManualEventReplay() {
+            InventoryTransactionServiceImpl transactionService = new InventoryTransactionServiceImpl(
+                    inventoryItemRepository, processedEventRepository, outboxEventRepository, objectMapper
+            );
+
+            UUID eventId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+
+            OrderCreatedEvent replayedEvent = new OrderCreatedEvent(
+                    eventId, orderId, UUID.randomUUID(),
+                    List.of(new OrderCreatedItem(productId, 3)),
+                    Instant.now(), 1
+            );
+
+            // Simulating event already recorded in processed_events table from past run
+            when(processedEventRepository.existsById(eventId)).thenReturn(true);
+
+            transactionService.process(replayedEvent);
+
+            // Verify idempotency check intercepted the replayed event
             verify(processedEventRepository).existsById(eventId);
             verifyNoInteractions(inventoryItemRepository);
             verifyNoInteractions(outboxEventRepository);
@@ -223,3 +316,4 @@ class KafkaRetryStrategyTest {
         }
     }
 }
+
