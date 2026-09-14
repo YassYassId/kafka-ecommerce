@@ -97,12 +97,12 @@ class KafkaRetryStrategyTest {
             }).when(inventoryService).processOrder(any(OrderCreatedEvent.class));
 
             // Attempt 1 fails
-            assertThatThrownBy(() -> orderCreatedConsumer.consume(orderId.toString(), payload))
+            assertThatThrownBy(() -> orderCreatedConsumer.consume(orderId.toString(), payload, null))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessageContaining("Temporary DB connection timeout");
 
             // Attempt 2 succeeds
-            orderCreatedConsumer.consume(orderId.toString(), payload);
+            orderCreatedConsumer.consume(orderId.toString(), payload, null);
 
             verify(inventoryService, times(2)).processOrder(any(OrderCreatedEvent.class));
             // Kafka template (DLT producer) is never called
@@ -210,7 +210,7 @@ class KafkaRetryStrategyTest {
 
             // 1. Process event 1 while consumer is running
             when(container.isRunning()).thenReturn(true);
-            orderCreatedConsumer.consume(orderId1.toString(), payload1);
+            orderCreatedConsumer.consume(orderId1.toString(), payload1, null);
             verify(inventoryService, times(1)).processOrder(any(OrderCreatedEvent.class));
 
             // 2. Stop consumer container (simulating planned maintenance / restart)
@@ -232,7 +232,7 @@ class KafkaRetryStrategyTest {
             );
             String payload2 = objectMapper.writeValueAsString(event2);
 
-            orderCreatedConsumer.consume(orderId2.toString(), payload2);
+            orderCreatedConsumer.consume(orderId2.toString(), payload2, null);
             verify(inventoryService, times(2)).processOrder(any(OrderCreatedEvent.class));
         }
 

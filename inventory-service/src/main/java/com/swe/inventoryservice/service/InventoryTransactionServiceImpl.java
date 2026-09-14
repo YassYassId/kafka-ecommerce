@@ -14,6 +14,7 @@ import com.swe.inventoryservice.repository.InventoryItemRepository;
 import com.swe.inventoryservice.repository.ProcessedEventRepository;
 import jakarta.persistence.OptimisticLockException;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.MDC;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
 import org.springframework.retry.annotation.Retryable;
@@ -108,12 +109,18 @@ public class InventoryTransactionServiceImpl implements InventoryTransactionServ
         try {
             String payload = objectMapper.writeValueAsString(event);
 
+            String correlationId = MDC.get("correlationId");
+            if (correlationId == null || correlationId.isBlank()) {
+                correlationId = UUID.randomUUID().toString();
+            }
+
             OutboxEvent outboxEvent = OutboxEvent.builder()
                     .id(eventId)
                     .aggregateType("Order")
                     .aggregateId(orderId)
                     .eventType(eventType)
                     .eventVersion(version)
+                    .correlationId(correlationId)
                     .payload(payload)
                     .createdAt(OffsetDateTime.now())
                     .retryCount(0)

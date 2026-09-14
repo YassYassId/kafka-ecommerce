@@ -5,23 +5,44 @@ import com.swe.inventoryservice.exception.InvalidEventException;
 import com.swe.inventoryservice.service.InventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
+
+import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class OrderCreatedConsumer {
 
+    private static final String CORRELATION_HEADER = "X-Correlation-Id";
+    private static final String MDC_KEY = "correlationId";
+
     private final InventoryService inventoryService;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(topics = "order.created", groupId = "inventory-service")
-    public void consume(String key, String payload) {
+    public void consume(@Header(KafkaHeaders.RECEIVED_KEY) String key,
+                        @Payload String payload,
+                        @Header(name = CORRELATION_HEADER, required = false) String correlationId) {
+
+        if (correlationId == null || correlationId.isBlank()) {
+            correlationId = UUID.randomUUID().toString();
+            log.warn(
+                    "Received OrderCreated event without correlation ID. Generated fallback correlationId={}",
+                    correlationId
+            );
+        }
 
         try {
+            MDC.put(MDC_KEY, correlationId);
+
             OrderCreatedEvent event = objectMapper.readValue(payload, OrderCreatedEvent.class);
             log.info(
                     "Received OrderCreated event. eventId={}, orderId={}, key={}",
@@ -37,6 +58,8 @@ public class OrderCreatedConsumer {
                     e
             );
             throw new InvalidEventException("Failed to deserialize OrderCreated event", e);
+        } finally {
+            MDC.remove(MDC_KEY);
         }
     }
 }

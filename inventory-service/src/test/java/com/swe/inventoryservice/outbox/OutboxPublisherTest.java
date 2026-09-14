@@ -50,6 +50,7 @@ class OutboxPublisherTest {
     void shouldPublishInventoryReservedEvent() {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        String correlationId = UUID.randomUUID().toString();
         String payload = "{\"orderId\":\"" + orderId + "\"}";
 
         OutboxEvent event = OutboxEvent.builder()
@@ -58,6 +59,7 @@ class OutboxPublisherTest {
                 .aggregateId(orderId)
                 .eventType("InventoryReserved")
                 .eventVersion(1)
+                .correlationId(correlationId)
                 .payload(payload)
                 .createdAt(OffsetDateTime.now())
                 .retryCount(0)
@@ -66,12 +68,12 @@ class OutboxPublisherTest {
         when(outboxEventService.claimEvents()).thenReturn(List.of(event));
 
         CompletableFuture<SendResult<String, String>> future = CompletableFuture.completedFuture(mock(SendResult.class));
-        when(inventoryEventProducer.publishInventoryEvent(KafkaTopicConfig.INVENTORY_RESERVED_TOPIC, orderId.toString(), payload))
+        when(inventoryEventProducer.publishInventoryEvent(KafkaTopicConfig.INVENTORY_RESERVED_TOPIC, orderId.toString(), payload, correlationId))
                 .thenReturn(future);
 
         outboxPublisher.publishPendingEvents();
 
-        verify(inventoryEventProducer).publishInventoryEvent(KafkaTopicConfig.INVENTORY_RESERVED_TOPIC, orderId.toString(), payload);
+        verify(inventoryEventProducer).publishInventoryEvent(KafkaTopicConfig.INVENTORY_RESERVED_TOPIC, orderId.toString(), payload, correlationId);
         verify(outboxEventService).markAsPublished(eventId);
         verify(outboxEventService, never()).recordFailure(any(), anyString());
     }
@@ -81,6 +83,7 @@ class OutboxPublisherTest {
     void shouldPublishInventoryRejectedEvent() {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        String correlationId = UUID.randomUUID().toString();
         String payload = "{\"orderId\":\"" + orderId + "\",\"reason\":\"INSUFFICIENT_STOCK\"}";
 
         OutboxEvent event = OutboxEvent.builder()
@@ -89,6 +92,7 @@ class OutboxPublisherTest {
                 .aggregateId(orderId)
                 .eventType("InventoryRejected")
                 .eventVersion(1)
+                .correlationId(correlationId)
                 .payload(payload)
                 .createdAt(OffsetDateTime.now())
                 .retryCount(0)
@@ -97,12 +101,12 @@ class OutboxPublisherTest {
         when(outboxEventService.claimEvents()).thenReturn(List.of(event));
 
         CompletableFuture<SendResult<String, String>> future = CompletableFuture.completedFuture(mock(SendResult.class));
-        when(inventoryEventProducer.publishInventoryEvent(KafkaTopicConfig.INVENTORY_REJECTED_TOPIC, orderId.toString(), payload))
+        when(inventoryEventProducer.publishInventoryEvent(KafkaTopicConfig.INVENTORY_REJECTED_TOPIC, orderId.toString(), payload, correlationId))
                 .thenReturn(future);
 
         outboxPublisher.publishPendingEvents();
 
-        verify(inventoryEventProducer).publishInventoryEvent(KafkaTopicConfig.INVENTORY_REJECTED_TOPIC, orderId.toString(), payload);
+        verify(inventoryEventProducer).publishInventoryEvent(KafkaTopicConfig.INVENTORY_REJECTED_TOPIC, orderId.toString(), payload, correlationId);
         verify(outboxEventService).markAsPublished(eventId);
     }
 
@@ -111,6 +115,7 @@ class OutboxPublisherTest {
     void shouldRecordFailureWhenPublishFails() {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        String correlationId = UUID.randomUUID().toString();
         String payload = "{\"orderId\":\"" + orderId + "\"}";
 
         OutboxEvent event = OutboxEvent.builder()
@@ -119,6 +124,7 @@ class OutboxPublisherTest {
                 .aggregateId(orderId)
                 .eventType("InventoryReserved")
                 .eventVersion(1)
+                .correlationId(correlationId)
                 .payload(payload)
                 .createdAt(OffsetDateTime.now())
                 .retryCount(0)
@@ -128,7 +134,7 @@ class OutboxPublisherTest {
 
         CompletableFuture<SendResult<String, String>> failedFuture = new CompletableFuture<>();
         failedFuture.completeExceptionally(new RuntimeException("Kafka unreachable"));
-        when(inventoryEventProducer.publishInventoryEvent(KafkaTopicConfig.INVENTORY_RESERVED_TOPIC, orderId.toString(), payload))
+        when(inventoryEventProducer.publishInventoryEvent(KafkaTopicConfig.INVENTORY_RESERVED_TOPIC, orderId.toString(), payload, correlationId))
                 .thenReturn(failedFuture);
 
         outboxPublisher.publishPendingEvents();

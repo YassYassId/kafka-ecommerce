@@ -58,7 +58,8 @@ class OrderCreatedConsumerTest {
 
             String jsonPayload = objectMapper.writeValueAsString(event);
 
-            consumer.consume(orderId.toString(), jsonPayload);
+            String correlationId = UUID.randomUUID().toString();
+            consumer.consume(orderId.toString(), jsonPayload, correlationId);
 
             ArgumentCaptor<OrderCreatedEvent> captor = ArgumentCaptor.forClass(OrderCreatedEvent.class);
             verify(inventoryService).processOrder(captor.capture());
@@ -77,7 +78,7 @@ class OrderCreatedConsumerTest {
         void shouldThrowInvalidEventExceptionWhenJsonIsMalformed() {
             String malformedPayload = "{ invalid json content }";
 
-            assertThatThrownBy(() -> consumer.consume("test-key", malformedPayload))
+            assertThatThrownBy(() -> consumer.consume("test-key", malformedPayload, null))
                     .isInstanceOf(InvalidEventException.class)
                     .hasMessageContaining("Failed to deserialize OrderCreated event");
 

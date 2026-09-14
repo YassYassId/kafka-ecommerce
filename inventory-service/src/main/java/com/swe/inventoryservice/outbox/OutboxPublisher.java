@@ -4,6 +4,7 @@ import com.swe.inventoryservice.config.KafkaTopicConfig;
 import com.swe.inventoryservice.messaging.InventoryEventProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -21,10 +22,11 @@ public class OutboxPublisher {
 
         for (OutboxEvent event : events) {
             try{
+                MDC.put("correlationId", event.getCorrelationId());
                 String topic = resolveTopic(event.getEventType());
 
                 inventoryEventProducer.publishInventoryEvent(topic,
-                        event.getAggregateId().toString(), event.getPayload()).get();
+                        event.getAggregateId().toString(), event.getPayload(), event.getCorrelationId()).get();
 
                 outboxEventService.markAsPublished(event.getId());
 
@@ -41,6 +43,8 @@ public class OutboxPublisher {
                     log.error("Failed to record failure for outbox event {}: {}", event.getId(), ex.getMessage());
                 }
                 log.error("Failed to publish outbox event {}. Error: {}", event.getId(), errorMessage, e);
+            } finally {
+                MDC.remove("correlationId");
             }
         }
     }
