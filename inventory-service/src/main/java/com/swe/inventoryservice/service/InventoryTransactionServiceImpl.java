@@ -14,6 +14,7 @@ import com.swe.inventoryservice.repository.InventoryItemRepository;
 import com.swe.inventoryservice.repository.ProcessedEventRepository;
 import jakarta.persistence.OptimisticLockException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.retry.annotation.Backoff;
@@ -31,6 +32,7 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class InventoryTransactionServiceImpl implements InventoryTransactionService {
 
     private final InventoryItemRepository repository;
@@ -87,6 +89,8 @@ public class InventoryTransactionServiceImpl implements InventoryTransactionServ
 
         saveOutboxEvent(reservedEvent.eventId(), event.orderId(), "InventoryReserved", reservedEvent.version(), reservedEvent);
 
+        log.info("Inventory reservation completed");
+
         markAsProcessed(event);
     }
 
@@ -94,13 +98,27 @@ public class InventoryTransactionServiceImpl implements InventoryTransactionServ
     private void rejectOrder(OrderCreatedEvent sourceEvent, UUID productId,
                              int requestedQuantity, int availableQuantity, String reason) {
 
-        InventoryRejectedEvent rejectedEvent = new InventoryRejectedEvent(UUID.randomUUID(), sourceEvent.orderId(), productId,
-                        requestedQuantity, availableQuantity, reason, Instant.now(), 1);
+        try {
+            MDC.put("productId", productId.toString());
+            MDC.put("reason", reason);
+            MDC.put("requestedQuantity", String.valueOf(requestedQuantity));
+            MDC.put("availableQuantity", String.valueOf(availableQuantity));
 
-        saveOutboxEvent(rejectedEvent.eventId(), sourceEvent.orderId(), "InventoryRejected", rejectedEvent.version(),
-                rejectedEvent);
+            log.warn("Inventory reservation rejected");
 
-        markAsProcessed(sourceEvent);
+            InventoryRejectedEvent rejectedEvent = new InventoryRejectedEvent(UUID.randomUUID(), sourceEvent.orderId(), productId,
+                    requestedQuantity, availableQuantity, reason, Instant.now(), 1);
+
+            saveOutboxEvent(rejectedEvent.eventId(), sourceEvent.orderId(), "InventoryRejected", rejectedEvent.version(),
+                    rejectedEvent);
+
+            markAsProcessed(sourceEvent);
+        } finally {
+            MDC.remove("productId");
+            MDC.remove("reason");
+            MDC.remove("requestedQuantity");
+            MDC.remove("availableQuantity");
+        }
     }
 
     private void saveOutboxEvent(UUID eventId, UUID orderId, String eventType,

@@ -21,8 +21,12 @@ public class OutboxPublisher {
         var events = outboxEventService.claimEvents();
 
         for (OutboxEvent event : events) {
-            try{
+            try {
                 MDC.put("correlationId", event.getCorrelationId());
+                MDC.put("outboxEventId", event.getId().toString());
+                MDC.put("orderId", event.getAggregateId().toString());
+                MDC.put("eventType", event.getEventType());
+
                 String topic = resolveTopic(event.getEventType());
 
                 inventoryEventProducer.publishInventoryEvent(topic,
@@ -30,7 +34,7 @@ public class OutboxPublisher {
 
                 outboxEventService.markAsPublished(event.getId());
 
-                log.info("Published outbox event {} of type {} to topic {}", event.getId(), event.getEventType(), topic);
+                log.info("Published outbox event to Kafka");
             } catch (Exception e) {
                 String errorMessage = e.getMessage();
                 if (errorMessage == null) {
@@ -39,12 +43,20 @@ public class OutboxPublisher {
 
                 try {
                     outboxEventService.recordFailure(event.getId(), errorMessage);
-                } catch (Exception ex) {
-                    log.error("Failed to record failure for outbox event {}: {}", event.getId(), ex.getMessage());
+                } catch (Exception updateException) {
+                    log.error("Failed to publish outbox event to Kafka", e);
                 }
-                log.error("Failed to publish outbox event {}. Error: {}", event.getId(), errorMessage, e);
+
+                log.error(
+                        "Failed to publish outbox event. Error: {}",
+                        errorMessage,
+                        e
+                );
             } finally {
                 MDC.remove("correlationId");
+                MDC.remove("outboxEventId");
+                MDC.remove("orderId");
+                MDC.remove("eventType");
             }
         }
     }

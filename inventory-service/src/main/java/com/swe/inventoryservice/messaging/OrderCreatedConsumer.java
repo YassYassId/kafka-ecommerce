@@ -34,22 +34,20 @@ public class OrderCreatedConsumer {
 
         if (correlationId == null || correlationId.isBlank()) {
             correlationId = UUID.randomUUID().toString();
-            log.warn(
-                    "Received OrderCreated event without correlation ID. Generated fallback correlationId={}",
-                    correlationId
-            );
+
+            log.warn("Received OrderCreated event without correlation ID. Generated fallback correlationId");
         }
 
         try {
             MDC.put(MDC_KEY, correlationId);
 
             OrderCreatedEvent event = objectMapper.readValue(payload, OrderCreatedEvent.class);
-            log.info(
-                    "Received OrderCreated event. eventId={}, orderId={}, key={}",
-                    event.eventId(),
-                    event.orderId(),
-                    key
-            );
+
+            MDC.put("eventId", event.eventId().toString());
+            MDC.put("orderId", event.orderId().toString());
+
+            log.info("Received OrderCreated event");
+
             inventoryService.processOrder(event);
         } catch (JacksonException e) {
             log.error(
@@ -60,6 +58,8 @@ public class OrderCreatedConsumer {
             throw new InvalidEventException("Failed to deserialize OrderCreated event", e);
         } finally {
             MDC.remove(MDC_KEY);
+            MDC.remove("eventId");
+            MDC.remove("orderId");
         }
     }
 }

@@ -29,7 +29,3 @@ spring:
   flyway:
     enabled: true
     baseline-on-migrate: true
-
-logging:
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} [%X{correlationId}] %-5level %logger{36} - %msg%n"
