@@ -7,14 +7,20 @@ import com.swe.notificationsservice.event.InventoryRejectedEvent;
 import com.swe.notificationsservice.event.InventoryReservedEvent;
 import com.swe.notificationsservice.repository.NotificationRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class NotificationServiceImpl implements NotificationService {
 
     private final NotificationRepository notificationRepository;
+
+    private final static String MDC_NOTIFICATION_ID = "notificationId";
+    private final static String MDC_NOTIFICATION_TYPE = "notificationType";
 
     @Override
     @Transactional
@@ -33,7 +39,17 @@ public class NotificationServiceImpl implements NotificationService {
                 .status(NotificationStatus.PENDING)
                 .build();
 
-        notificationRepository.save(notification);
+        Notification savedNotification = notificationRepository.save(notification);
+
+        try {
+            MDC.put(MDC_NOTIFICATION_ID, savedNotification.getId().toString());
+            MDC.put(MDC_NOTIFICATION_TYPE, savedNotification.getType().name());
+
+            log.info("Notification created");
+        } finally {
+            MDC.remove(MDC_NOTIFICATION_ID);
+            MDC.remove(MDC_NOTIFICATION_TYPE);
+        }
     }
 
     @Override
@@ -41,7 +57,7 @@ public class NotificationServiceImpl implements NotificationService {
     public void handleInventoryRejectedEvent(InventoryRejectedEvent event) {
 
         if (notificationRepository.findByEventId(event.eventId()).isPresent()) {
-            // Event has already been processed, skip handling
+            log.debug("Skipping already processed notification event");
             return;
         }
 
@@ -54,6 +70,15 @@ public class NotificationServiceImpl implements NotificationService {
                 .status(NotificationStatus.PENDING)
                 .build();
 
-        notificationRepository.save(notification);
+        Notification savedNotification = notificationRepository.save(notification);
+        try {
+            MDC.put(MDC_NOTIFICATION_ID, savedNotification.getId().toString());
+            MDC.put(MDC_NOTIFICATION_TYPE, savedNotification.getType().name());
+
+            log.info("Notification created");
+        } finally {
+            MDC.remove(MDC_NOTIFICATION_ID);
+            MDC.remove(MDC_NOTIFICATION_TYPE);
+        }
     }
 }

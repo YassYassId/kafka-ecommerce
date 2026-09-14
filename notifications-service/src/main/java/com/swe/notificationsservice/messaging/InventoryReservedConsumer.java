@@ -30,14 +30,11 @@ public class InventoryReservedConsumer {
     @KafkaListener(topics = "inventory.reserved", groupId = "notifications-service")
     public void consume(@Header(KafkaHeaders.RECEIVED_KEY) String key,
                         @Payload String payload,
-                        @Header(value = CORRELATION_HEADER) String correlationId){
-        if(correlationId == null || correlationId.isBlank()){
+                        @Header(name = CORRELATION_HEADER, required = false) String correlationId){
+        if (correlationId == null || correlationId.isBlank()) {
             correlationId = UUID.randomUUID().toString();
 
-            log.warn(
-                    "Received InventoryReserved event without correlation ID. Generated fallback correlationId={}",
-                    correlationId
-            );
+            log.warn("Received InventoryReserved event without correlation ID. Generated fallback correlationId");
         }
 
         try {
@@ -45,7 +42,10 @@ public class InventoryReservedConsumer {
 
             InventoryReservedEvent event = objectMapper.readValue(payload, InventoryReservedEvent.class);
 
-            log.info("Received InventoryReserved event. eventId={}, orderId={}, key={}", event.eventId(), event.orderId(), key);
+            MDC.put("eventId", event.eventId().toString());
+            MDC.put("orderId", event.orderId().toString());
+
+            log.info("Received InventoryReserved event");
 
             notificationService.handleInventoryReservedEvent(event);
         } catch (JacksonException e) {
@@ -53,6 +53,8 @@ public class InventoryReservedConsumer {
             throw new InvalidEventException("Failed to process InventoryReserved event", e);
         } finally {
             MDC.remove(MDC_KEY);
+            MDC.remove("eventId");
+            MDC.remove("orderId");
         }
     }
 }

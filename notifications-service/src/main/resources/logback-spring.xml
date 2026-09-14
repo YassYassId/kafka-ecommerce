@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<configuration>
+
+    <springProperty
+            scope="context"
+            name="applicationName"
+            source="spring.application.name"
+            defaultValue="unknown-service"
+    />
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+
+            <customFields>
+                {"service":"${applicationName}"}
+            </customFields>
+
+            <includeMdc>true</includeMdc>
+
+        </encoder>
+    </appender>
+
+    <logger name="org.apache.kafka" level="WARN"/>
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+</configuration>

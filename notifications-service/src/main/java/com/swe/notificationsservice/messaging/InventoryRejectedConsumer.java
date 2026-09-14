@@ -35,10 +35,7 @@ public class InventoryRejectedConsumer {
         if (correlationId == null || correlationId.isBlank()) {
             correlationId = UUID.randomUUID().toString();
 
-            log.warn(
-                    "Received InventoryReserved event without correlation ID. Generated fallback correlationId={}",
-                    correlationId
-            );
+            log.warn("Received InventoryRejected event without correlation ID. Generated fallback correlationId");
         }
 
         try {
@@ -46,7 +43,10 @@ public class InventoryRejectedConsumer {
 
             InventoryRejectedEvent event = objectMapper.readValue(payload, InventoryRejectedEvent.class);
 
-            log.info("Received InventoryRejected event. eventId={}, orderId={}, key={}", event.eventId(), event.orderId(), key);
+            MDC.put("eventId", event.eventId().toString());
+            MDC.put("orderId", event.orderId().toString());
+
+            log.info("Received InventoryRejected event");
 
             notificationService.handleInventoryRejectedEvent(event);
         } catch (JacksonException e) {
@@ -54,6 +54,8 @@ public class InventoryRejectedConsumer {
             throw new InvalidEventException("Failed to process InventoryRejected event", e);
         } finally {
             MDC.remove(MDC_KEY);
+            MDC.remove("eventId");
+            MDC.remove("orderId");
         }
     }
 }
