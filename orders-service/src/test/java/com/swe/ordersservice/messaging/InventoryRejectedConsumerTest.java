@@ -57,7 +57,8 @@ class InventoryRejectedConsumerTest {
 
             String jsonPayload = objectMapper.writeValueAsString(event);
 
-            consumer.consume(orderId.toString(), jsonPayload);
+            String correlationId = UUID.randomUUID().toString();
+            consumer.consume(orderId.toString(), jsonPayload, correlationId);
 
             ArgumentCaptor<InventoryRejectedEvent> captor = ArgumentCaptor.forClass(InventoryRejectedEvent.class);
             verify(orderService).cancelOrder(captor.capture());
@@ -78,7 +79,7 @@ class InventoryRejectedConsumerTest {
         void shouldThrowInvalidEventExceptionWhenJsonIsMalformed() {
             String malformedPayload = "{ invalid json content }";
 
-            assertThatThrownBy(() -> consumer.consume("test-key", malformedPayload))
+            assertThatThrownBy(() -> consumer.consume("test-key", malformedPayload, null))
                     .isInstanceOf(InvalidEventException.class)
                     .hasMessageContaining("Failed to deserialize InventoryRejected event");
 

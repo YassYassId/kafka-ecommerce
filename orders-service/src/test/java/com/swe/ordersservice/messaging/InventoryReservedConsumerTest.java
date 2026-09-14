@@ -52,7 +52,8 @@ class InventoryReservedConsumerTest {
 
             String jsonPayload = objectMapper.writeValueAsString(event);
 
-            consumer.consume(orderId.toString(), jsonPayload);
+            String correlationId = UUID.randomUUID().toString();
+            consumer.consume(orderId.toString(), jsonPayload, correlationId);
 
             ArgumentCaptor<InventoryReservedEvent> captor = ArgumentCaptor.forClass(InventoryReservedEvent.class);
             verify(orderService).confirmOrder(captor.capture());
@@ -69,7 +70,7 @@ class InventoryReservedConsumerTest {
         void shouldThrowInvalidEventExceptionWhenJsonIsMalformed() {
             String malformedPayload = "{ invalid json content }";
 
-            assertThatThrownBy(() -> consumer.consume("test-key", malformedPayload))
+            assertThatThrownBy(() -> consumer.consume("test-key", malformedPayload, null))
                     .isInstanceOf(InvalidEventException.class)
                     .hasMessageContaining("Failed to deserialize InventoryReserved event");
 

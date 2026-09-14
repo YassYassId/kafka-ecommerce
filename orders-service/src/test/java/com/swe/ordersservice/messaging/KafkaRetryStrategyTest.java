@@ -96,12 +96,12 @@ class KafkaRetryStrategyTest {
             }).when(orderService).confirmOrder(any(InventoryReservedEvent.class));
 
             // Attempt 1 fails
-            assertThatThrownBy(() -> reservedConsumer.consume(orderId.toString(), payload))
+            assertThatThrownBy(() -> reservedConsumer.consume(orderId.toString(), payload, null))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessageContaining("Temporary DB timeout");
 
             // Attempt 2 succeeds
-            reservedConsumer.consume(orderId.toString(), payload);
+            reservedConsumer.consume(orderId.toString(), payload, null);
 
             verify(orderService, times(2)).confirmOrder(any(InventoryReservedEvent.class));
             verifyNoInteractions(kafkaTemplate);
@@ -178,7 +178,7 @@ class KafkaRetryStrategyTest {
 
             // 1. Process event 1 while consumer is running
             when(container.isRunning()).thenReturn(true);
-            reservedConsumer.consume(orderId1.toString(), payload1);
+            reservedConsumer.consume(orderId1.toString(), payload1, null);
             verify(orderService, times(1)).confirmOrder(any(InventoryReservedEvent.class));
 
             // 2. Stop consumer container (simulating planned maintenance / restart)
@@ -198,7 +198,7 @@ class KafkaRetryStrategyTest {
             );
             String payload2 = objectMapper.writeValueAsString(event2);
 
-            reservedConsumer.consume(orderId2.toString(), payload2);
+            reservedConsumer.consume(orderId2.toString(), payload2, null);
             verify(orderService, times(2)).confirmOrder(any(InventoryReservedEvent.class));
         }
 

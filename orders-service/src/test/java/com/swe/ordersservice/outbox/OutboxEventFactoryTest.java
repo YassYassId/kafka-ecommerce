@@ -31,13 +31,14 @@ class OutboxEventFactoryTest {
     private OutboxEventFactory outboxEventFactory;
 
     @Test
-    @DisplayName("should successfully build OutboxEvent from OrderCreatedEvent")
+    @DisplayName("should successfully build OutboxEvent from OrderCreatedEvent and correlationId")
     void create_WhenValidEvent_ShouldReturnOutboxEvent() {
         // Arrange
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
+        String correlationId = UUID.randomUUID().toString();
 
         OrderCreatedEvent event = new OrderCreatedEvent(
                 eventId,
@@ -52,7 +53,7 @@ class OutboxEventFactoryTest {
         when(objectMapper.writeValueAsString(event)).thenReturn(expectedJsonPayload);
 
         // Act
-        OutboxEvent outboxEvent = outboxEventFactory.create(event);
+        OutboxEvent outboxEvent = outboxEventFactory.create(event, correlationId);
 
         // Assert
         assertThat(outboxEvent).isNotNull();
@@ -62,6 +63,7 @@ class OutboxEventFactoryTest {
         assertThat(outboxEvent.getEventType()).isEqualTo("OrderCreated");
         assertThat(outboxEvent.getEventVersion()).isEqualTo(1);
         assertThat(outboxEvent.getPayload()).isEqualTo(expectedJsonPayload);
+        assertThat(outboxEvent.getCorrelationId()).isEqualTo(correlationId);
         assertThat(outboxEvent.getCreatedAt()).isNotNull();
         assertThat(outboxEvent.getPublishedAt()).isNull();
         assertThat(outboxEvent.getRetryCount()).isZero();
@@ -72,6 +74,7 @@ class OutboxEventFactoryTest {
     @DisplayName("should throw InvalidEventException when JSON serialization fails")
     void create_WhenSerializationFails_ShouldThrowInvalidEventException() {
         // Arrange
+        String correlationId = UUID.randomUUID().toString();
         OrderCreatedEvent event = new OrderCreatedEvent(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
@@ -85,10 +88,11 @@ class OutboxEventFactoryTest {
                 .thenThrow(new JacksonException("Serialization failed") {});
 
         // Act & Assert
-        assertThatThrownBy(() -> outboxEventFactory.create(event))
+        assertThatThrownBy(() -> outboxEventFactory.create(event, correlationId))
                 .isInstanceOf(InvalidEventException.class)
                 .hasMessage("Failed to serialize OrderCreatedEvent")
                 .hasCauseInstanceOf(JacksonException.class);
     }
 }
+
 

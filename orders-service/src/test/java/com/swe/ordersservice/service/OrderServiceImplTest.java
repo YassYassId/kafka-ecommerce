@@ -58,18 +58,105 @@ class OrderServiceImplTest {
     class CreateOrderTests {
 
         @Test
-        @DisplayName("should successfully create and persist order with items and outbox event")
-        void shouldCreateOrderSuccessfully() {
+        @DisplayName("should successfully create and persist order with items and outbox event using MDC correlationId")
+        void shouldCreateOrderSuccessfullyWithMdcCorrelationId() {
             // Arrange
-            UUID customerId = UUID.randomUUID();
-            UUID product1Id = UUID.randomUUID();
-            UUID product2Id = UUID.randomUUID();
+            String correlationId = "test-correlation-" + UUID.randomUUID();
+            org.slf4j.MDC.put("correlationId", correlationId);
 
-            List<OrderItemRequest> itemRequests = List.of(
-                    new OrderItemRequest(product1Id, 2),
-                    new OrderItemRequest(product2Id, 5)
+            try {
+                UUID customerId = UUID.randomUUID();
+                UUID product1Id = UUID.randomUUID();
+                UUID product2Id = UUID.randomUUID();
+
+                List<OrderItemRequest> itemRequests = List.of(
+                        new OrderItemRequest(product1Id, 2),
+                        new OrderItemRequest(product2Id, 5)
+                );
+                OrderRequest request = new OrderRequest(customerId, itemRequests);
+
+                UUID generatedOrderId = UUID.randomUUID();
+                when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
+                    Order orderToSave = invocation.getArgument(0);
+                    orderToSave.setId(generatedOrderId);
+                    return orderToSave;
+                });
+
+                OutboxEvent mockOutboxEvent = OutboxEvent.builder()
+                        .id(UUID.randomUUID())
+                        .aggregateType("Order")
+                        .aggregateId(generatedOrderId)
+                        .eventType("OrderCreated")
+                        .eventVersion(1)
+                        .correlationId(correlationId)
+                        .payload("{\"orderId\":\"" + generatedOrderId + "\"}")
+                        .createdAt(OffsetDateTime.now())
+                        .retryCount(0)
+                        .build();
+
+                when(outboxEventFactory.create(any(OrderCreatedEvent.class), eq(correlationId))).thenReturn(mockOutboxEvent);
+
+                // Act
+                OrderResponse response = orderService.createOrder(request);
+
+                // Assert
+                assertThat(response).isNotNull();
+                assertThat(response.orderId()).isEqualTo(generatedOrderId);
+                assertThat(response.status()).isEqualTo(OrderStatus.PENDING);
+
+                // Verify order persistence
+                ArgumentCaptor<Order> orderCaptor = ArgumentCaptor.forClass(Order.class);
+                verify(orderRepository).save(orderCaptor.capture());
+
+                Order capturedOrder = orderCaptor.getValue();
+                assertThat(capturedOrder.getCustomerId()).isEqualTo(customerId);
+                assertThat(capturedOrder.getStatus()).isEqualTo(OrderStatus.PENDING);
+                assertThat(capturedOrder.getItems()).hasSize(2);
+
+                assertThat(capturedOrder.getItems())
+                        .extracting("productId")
+                        .containsExactlyInAnyOrder(product1Id, product2Id);
+
+                assertThat(capturedOrder.getItems())
+                        .extracting("quantity")
+                        .containsExactlyInAnyOrder(2, 5);
+
+                capturedOrder.getItems().forEach(item ->
+                        assertThat(item.getOrder()).isSameAs(capturedOrder)
+                );
+
+                // Verify outbox event creation and persistence
+                ArgumentCaptor<OrderCreatedEvent> eventCaptor = ArgumentCaptor.forClass(OrderCreatedEvent.class);
+                verify(outboxEventFactory).create(eventCaptor.capture(), eq(correlationId));
+
+                OrderCreatedEvent capturedEvent = eventCaptor.getValue();
+                assertThat(capturedEvent.eventId()).isNotNull();
+                assertThat(capturedEvent.orderId()).isEqualTo(generatedOrderId);
+                assertThat(capturedEvent.customerId()).isEqualTo(customerId);
+                assertThat(capturedEvent.version()).isEqualTo(1);
+                assertThat(capturedEvent.occurredAt()).isNotNull();
+                assertThat(capturedEvent.items()).hasSize(2);
+                assertThat(capturedEvent.items())
+                        .extracting("productId")
+                        .containsExactlyInAnyOrder(product1Id, product2Id);
+
+                verify(outboxEventRepository).save(mockOutboxEvent);
+            } finally {
+                org.slf4j.MDC.remove("correlationId");
+            }
+        }
+
+        @Test
+        @DisplayName("should generate new correlationId when MDC is blank")
+        void shouldGenerateNewCorrelationIdWhenMdcIsBlank() {
+            // Arrange
+            org.slf4j.MDC.remove("correlationId");
+
+            UUID customerId = UUID.randomUUID();
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(UUID.randomUUID(), 1))
             );
-            OrderRequest request = new OrderRequest(customerId, itemRequests);
 
             UUID generatedOrderId = UUID.randomUUID();
             when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
@@ -78,63 +165,22 @@ class OrderServiceImplTest {
                 return orderToSave;
             });
 
-            OutboxEvent mockOutboxEvent = OutboxEvent.builder()
-                    .id(UUID.randomUUID())
-                    .aggregateType("Order")
-                    .aggregateId(generatedOrderId)
-                    .eventType("OrderCreated")
-                    .eventVersion(1)
-                    .payload("{\"orderId\":\"" + generatedOrderId + "\"}")
-                    .createdAt(OffsetDateTime.now())
-                    .retryCount(0)
-                    .build();
-
-            when(outboxEventFactory.create(any(OrderCreatedEvent.class))).thenReturn(mockOutboxEvent);
+            OutboxEvent mockOutboxEvent = OutboxEvent.builder().build();
+            when(outboxEventFactory.create(any(OrderCreatedEvent.class), anyString())).thenReturn(mockOutboxEvent);
 
             // Act
             OrderResponse response = orderService.createOrder(request);
 
             // Assert
             assertThat(response).isNotNull();
-            assertThat(response.orderId()).isEqualTo(generatedOrderId);
-            assertThat(response.status()).isEqualTo(OrderStatus.PENDING);
 
-            // Verify order persistence
-            ArgumentCaptor<Order> orderCaptor = ArgumentCaptor.forClass(Order.class);
-            verify(orderRepository).save(orderCaptor.capture());
+            ArgumentCaptor<String> correlationIdCaptor = ArgumentCaptor.forClass(String.class);
+            verify(outboxEventFactory).create(any(OrderCreatedEvent.class), correlationIdCaptor.capture());
 
-            Order capturedOrder = orderCaptor.getValue();
-            assertThat(capturedOrder.getCustomerId()).isEqualTo(customerId);
-            assertThat(capturedOrder.getStatus()).isEqualTo(OrderStatus.PENDING);
-            assertThat(capturedOrder.getItems()).hasSize(2);
-
-            assertThat(capturedOrder.getItems())
-                    .extracting("productId")
-                    .containsExactlyInAnyOrder(product1Id, product2Id);
-
-            assertThat(capturedOrder.getItems())
-                    .extracting("quantity")
-                    .containsExactlyInAnyOrder(2, 5);
-
-            capturedOrder.getItems().forEach(item ->
-                    assertThat(item.getOrder()).isSameAs(capturedOrder)
-            );
-
-            // Verify outbox event creation and persistence
-            ArgumentCaptor<OrderCreatedEvent> eventCaptor = ArgumentCaptor.forClass(OrderCreatedEvent.class);
-            verify(outboxEventFactory).create(eventCaptor.capture());
-
-            OrderCreatedEvent capturedEvent = eventCaptor.getValue();
-            assertThat(capturedEvent.eventId()).isNotNull();
-            assertThat(capturedEvent.orderId()).isEqualTo(generatedOrderId);
-            assertThat(capturedEvent.customerId()).isEqualTo(customerId);
-            assertThat(capturedEvent.version()).isEqualTo(1);
-            assertThat(capturedEvent.occurredAt()).isNotNull();
-            assertThat(capturedEvent.items()).hasSize(2);
-            assertThat(capturedEvent.items())
-                    .extracting("productId")
-                    .containsExactlyInAnyOrder(product1Id, product2Id);
-
+            String passedCorrelationId = correlationIdCaptor.getValue();
+            assertThat(passedCorrelationId).isNotBlank();
+            // Validate it's a valid UUID
+            assertThat(UUID.fromString(passedCorrelationId)).isNotNull();
             verify(outboxEventRepository).save(mockOutboxEvent);
         }
 
@@ -175,7 +221,7 @@ class OrderServiceImplTest {
                 return orderToSave;
             });
 
-            when(outboxEventFactory.create(any(OrderCreatedEvent.class)))
+            when(outboxEventFactory.create(any(OrderCreatedEvent.class), anyString()))
                     .thenThrow(new IllegalStateException("Failed to serialize OrderCreatedEvent"));
 
             // Act & Assert
@@ -184,7 +230,7 @@ class OrderServiceImplTest {
                     .hasMessage("Failed to serialize OrderCreatedEvent");
 
             verify(orderRepository).save(any(Order.class));
-            verify(outboxEventFactory).create(any(OrderCreatedEvent.class));
+            verify(outboxEventFactory).create(any(OrderCreatedEvent.class), anyString());
             verifyNoInteractions(outboxEventRepository);
         }
 
@@ -204,7 +250,7 @@ class OrderServiceImplTest {
             });
 
             OutboxEvent mockOutboxEvent = OutboxEvent.builder().build();
-            when(outboxEventFactory.create(any(OrderCreatedEvent.class))).thenReturn(mockOutboxEvent);
+            when(outboxEventFactory.create(any(OrderCreatedEvent.class), anyString())).thenReturn(mockOutboxEvent);
             when(outboxEventRepository.save(mockOutboxEvent))
                     .thenThrow(new RuntimeException("Outbox persistence failure"));
 
@@ -214,7 +260,7 @@ class OrderServiceImplTest {
                     .hasMessage("Outbox persistence failure");
 
             verify(orderRepository).save(any(Order.class));
-            verify(outboxEventFactory).create(any(OrderCreatedEvent.class));
+            verify(outboxEventFactory).create(any(OrderCreatedEvent.class), anyString());
             verify(outboxEventRepository).save(mockOutboxEvent);
         }
     }

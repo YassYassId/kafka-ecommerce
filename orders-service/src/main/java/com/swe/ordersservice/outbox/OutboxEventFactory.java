@@ -15,7 +15,7 @@ public class OutboxEventFactory {
 
     private final ObjectMapper objectMapper;
 
-    public OutboxEvent create(OrderCreatedEvent event) {
+    public OutboxEvent create(OrderCreatedEvent event, String correlationId) {
 
         try {
             return OutboxEvent.builder()
@@ -27,6 +27,7 @@ public class OutboxEventFactory {
                     .payload(objectMapper.writeValueAsString(event))
                     .createdAt(OffsetDateTime.now())
                     .retryCount(0)
+                    .correlationId(correlationId)
                     .build();
 
         } catch (JacksonException e) {

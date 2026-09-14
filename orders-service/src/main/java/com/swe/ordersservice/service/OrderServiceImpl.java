@@ -18,6 +18,7 @@ import com.swe.ordersservice.outbox.OutboxEventRepository;
 import com.swe.ordersservice.repository.OrderRepository;
 import com.swe.ordersservice.repository.ProcessedEventRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -73,8 +74,12 @@ public class OrderServiceImpl implements OrderService {
                 1
         );
 
+        String correlationId = MDC.get("correlationId");
+        if (correlationId == null || correlationId.isBlank()) {
+            correlationId = UUID.randomUUID().toString();
+        }
         // 5. Serialize the event and save it to the outbox
-        OutboxEvent outboxEvent = outboxEventFactory.create(event);
+        OutboxEvent outboxEvent = outboxEventFactory.create(event, correlationId);
 
         outboxEventRepository.save(outboxEvent);
 

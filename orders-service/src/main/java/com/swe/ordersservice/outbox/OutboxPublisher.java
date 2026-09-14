@@ -4,6 +4,7 @@ package com.swe.ordersservice.outbox;
 import com.swe.ordersservice.messaging.OrderEventProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -22,8 +23,10 @@ public class OutboxPublisher {
 
         for (OutboxEvent event : events) {
             try {
+                MDC.put("correlationId", event.getCorrelationId());
+
                 orderEventProducer.publishOrderCreatedEvent(
-                        event.getAggregateId().toString(), event.getPayload())
+                        event.getAggregateId().toString(), event.getPayload(), event.getCorrelationId())
                         .get();
 
                 outboxEventService.markAsPublished(event.getId());
@@ -55,6 +58,8 @@ public class OutboxPublisher {
                         errorMessage,
                         e
                 );
+            } finally {
+                MDC.remove("correlationId");
             }
         }
     }

@@ -29,6 +29,7 @@ class OutboxEventRepositoryTest {
         // Arrange
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        String correlationId = UUID.randomUUID().toString();
         String jsonPayload = "{\"eventId\": \"" + eventId + "\", \"orderId\": \"" + orderId + "\"}";
         OffsetDateTime now = OffsetDateTime.now();
 
@@ -38,6 +39,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(orderId)
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(correlationId)
                 .payload(jsonPayload)
                 .createdAt(now)
                 .retryCount(0)
@@ -56,6 +58,7 @@ class OutboxEventRepositoryTest {
         assertThat(retrievedEvent.getAggregateId()).isEqualTo(orderId);
         assertThat(retrievedEvent.getEventType()).isEqualTo("OrderCreated");
         assertThat(retrievedEvent.getEventVersion()).isEqualTo(1);
+        assertThat(retrievedEvent.getCorrelationId()).isEqualTo(correlationId);
         assertThat(retrievedEvent.getPayload())
                 .contains(eventId.toString())
                 .contains(orderId.toString());
@@ -76,6 +79,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(UUID.randomUUID().toString())
                 .payload("{}")
                 .createdAt(OffsetDateTime.now())
                 .retryCount(0)
@@ -107,6 +111,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(UUID.randomUUID().toString())
                 .payload("{}")
                 .createdAt(OffsetDateTime.now())
                 .retryCount(0)
@@ -139,6 +144,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(UUID.randomUUID().toString())
                 .payload("{}")
                 .createdAt(OffsetDateTime.now())
                 .retryCount(0)
@@ -168,6 +174,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(UUID.randomUUID().toString())
                 .payload("{}")
                 .createdAt(OffsetDateTime.now())
                 .retryCount(0)
@@ -203,6 +210,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(UUID.randomUUID().toString())
                 .payload("{}")
                 .createdAt(OffsetDateTime.now().minusMinutes(5))
                 .retryCount(0)
@@ -215,6 +223,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(UUID.randomUUID().toString())
                 .payload("{}")
                 .createdAt(OffsetDateTime.now().minusMinutes(4))
                 .claimedUntil(OffsetDateTime.now().minusSeconds(10))
@@ -228,6 +237,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(UUID.randomUUID().toString())
                 .payload("{}")
                 .createdAt(OffsetDateTime.now().minusMinutes(3))
                 .publishedAt(OffsetDateTime.now())
@@ -241,6 +251,7 @@ class OutboxEventRepositoryTest {
                 .aggregateId(UUID.randomUUID())
                 .eventType("OrderCreated")
                 .eventVersion(1)
+                .correlationId(UUID.randomUUID().toString())
                 .payload("{}")
                 .createdAt(OffsetDateTime.now().minusMinutes(2))
                 .claimedUntil(OffsetDateTime.now().plusSeconds(30))

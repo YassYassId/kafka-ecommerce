@@ -29,6 +29,9 @@ public class OutboxEvent {
     @Column(name = "event_version", nullable = false)
     private int eventVersion;
 
+    @Column(name = "correlation_id", nullable = false)
+    private String correlationId;
+
     @Column(name = "payload", nullable = false, columnDefinition = "jsonb")
     @JdbcTypeCode(SqlTypes.JSON)
     private String payload;
