@@ -18,6 +18,7 @@ import com.swe.ordersservice.outbox.OutboxEventRepository;
 import com.swe.ordersservice.repository.OrderRepository;
 import com.swe.ordersservice.repository.ProcessedEventRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +29,7 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
@@ -77,11 +79,22 @@ public class OrderServiceImpl implements OrderService {
         String correlationId = MDC.get("correlationId");
         if (correlationId == null || correlationId.isBlank()) {
             correlationId = UUID.randomUUID().toString();
+            log.warn("Correlation ID missing while creating order; generated a new one");
         }
         // 5. Serialize the event and save it to the outbox
         OutboxEvent outboxEvent = outboxEventFactory.create(event, correlationId);
 
         outboxEventRepository.save(outboxEvent);
+
+        try {
+            MDC.put("orderId", savedOrder.getId().toString());
+            MDC.put("eventId", event.eventId().toString());
+
+            log.info("Order created");
+        } finally {
+            MDC.remove("orderId");
+            MDC.remove("eventId");
+        }
 
         // 6. Return the API response
         return new OrderResponse(
@@ -106,17 +119,20 @@ public class OrderServiceImpl implements OrderService {
     @Transactional
     public void confirmOrder(InventoryReservedEvent event) {
         updateOrderStatus(event.eventId(), event.orderId(), OrderStatus.CONFIRMED);
+        log.info("Order confirmed");
     }
 
     @Override
     @Transactional
     public void cancelOrder(InventoryRejectedEvent event) {
         updateOrderStatus(event.eventId(), event.orderId(), OrderStatus.CANCELLED);
+        log.info("Order cancelled");
     }
 
     private void updateOrderStatus(UUID eventId, UUID orderId, OrderStatus targetStatus) {
         // Check if the event has already been processed (idempotency)
         if (processedEventRepository.existsById(eventId)) {
+            log.debug("Skipping already processed order lifecycle event");
             return;
         }
 

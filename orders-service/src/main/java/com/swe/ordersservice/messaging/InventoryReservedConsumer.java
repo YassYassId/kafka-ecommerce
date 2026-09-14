@@ -35,18 +35,17 @@ public class InventoryReservedConsumer {
         if (correlationId == null || correlationId.isBlank()) {
             correlationId = UUID.randomUUID().toString();
 
-            log.warn(
-                    "Received InventoryReserved event without correlation ID. Generated fallback correlationId={}",
-                    correlationId
-            );
+            log.warn("Received InventoryReserved event without correlation ID. Generated fallback correlationId");
         }
 
         try {
 
             MDC.put(MDC_KEY, correlationId);
             InventoryReservedEvent event = objectMapper.readValue(payload, InventoryReservedEvent.class);
+            MDC.put("eventId", event.eventId().toString());
+            MDC.put("orderId", event.orderId().toString());
 
-            log.info("Received InventoryReserved event. eventId={}, orderId={}, key={}", event.eventId(), event.orderId(), key);
+            log.info("Received InventoryReserved event");
 
             orderService.confirmOrder(event);
         } catch (JacksonException e) {
@@ -54,6 +53,8 @@ public class InventoryReservedConsumer {
             throw new InvalidEventException("Failed to deserialize InventoryReserved event", e);
         } finally {
             MDC.remove(MDC_KEY);
+            MDC.remove("eventId");
+            MDC.remove("orderId");
         }
     }
 }
