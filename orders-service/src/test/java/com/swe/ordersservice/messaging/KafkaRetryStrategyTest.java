@@ -12,11 +12,15 @@ import com.swe.ordersservice.outbox.OutboxEventFactory;
 import com.swe.ordersservice.outbox.OutboxEventRepository;
 import com.swe.ordersservice.repository.OrderRepository;
 import com.swe.ordersservice.repository.ProcessedEventRepository;
+import com.swe.ordersservice.metrics.AfterCommitExecutor;
+import com.swe.ordersservice.metrics.KafkaMetrics;
+import com.swe.ordersservice.metrics.OrderMetrics;
 import com.swe.ordersservice.service.OrderService;
 import com.swe.ordersservice.service.OrderServiceImpl;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -67,10 +71,28 @@ class KafkaRetryStrategyTest {
     @Mock
     private MessageListenerContainer container;
 
+    @Mock
+    private KafkaMetrics kafkaMetrics;
+
+    @Mock
+    private OrderMetrics orderMetrics;
+
+    @Mock
+    private AfterCommitExecutor afterCommitExecutor;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
     private final KafkaConsumerConfig consumerConfig = new KafkaConsumerConfig();
+
+    @BeforeEach
+    void setUp() {
+        lenient().doAnswer(invocation -> {
+            Runnable action = invocation.getArgument(0);
+            action.run();
+            return null;
+        }).when(afterCommitExecutor).execute(any());
+    }
 
     @Nested
     @DisplayName("1. Temporary Processing Failure")
@@ -79,7 +101,7 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario 1: Consumer fails temporarily, retries and succeeds -> not sent to DLT")
         void shouldRetryAndSucceedWithoutSendingToDlt() throws Exception {
-            InventoryReservedConsumer reservedConsumer = new InventoryReservedConsumer(orderService, objectMapper);
+            InventoryReservedConsumer reservedConsumer = new InventoryReservedConsumer(orderService, objectMapper, kafkaMetrics);
 
             UUID orderId = UUID.randomUUID();
             InventoryReservedEvent event = new InventoryReservedEvent(
@@ -168,7 +190,7 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario A: Normal restart -> Stop consumer, publish another event, restart consumer, new event gets processed")
         void shouldProcessNewOrderEventAfterConsumerRestart() throws Exception {
-            InventoryReservedConsumer reservedConsumer = new InventoryReservedConsumer(orderService, objectMapper);
+            InventoryReservedConsumer reservedConsumer = new InventoryReservedConsumer(orderService, objectMapper, kafkaMetrics);
 
             UUID orderId1 = UUID.randomUUID();
             InventoryReservedEvent event1 = new InventoryReservedEvent(
@@ -205,8 +227,8 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario B: Restart before offset commit / redelivery -> Same event delivered again, processed_events prevents duplicate order transition")
         void shouldPreventDuplicateOrderStatusTransitionWhenEventRedeliveredAfterRestart() {
-            OrderServiceImpl orderServiceImpl = new OrderServiceImpl(
-                    orderRepository, outboxEventRepository, outboxEventFactory, processedEventRepository
+            com.swe.ordersservice.service.OrderServiceImpl orderServiceImpl = new com.swe.ordersservice.service.OrderServiceImpl(
+                    orderRepository, outboxEventRepository, outboxEventFactory, processedEventRepository, orderMetrics, afterCommitExecutor
             );
 
             UUID eventId = UUID.randomUUID();
@@ -245,8 +267,8 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario D: Orders replay -> Replay InventoryReserved and InventoryRejected -> No second state transition")
         void shouldIgnoreReplayOfAlreadyProcessedInventoryEvents() {
-            OrderServiceImpl orderServiceImpl = new OrderServiceImpl(
-                    orderRepository, outboxEventRepository, outboxEventFactory, processedEventRepository
+            com.swe.ordersservice.service.OrderServiceImpl orderServiceImpl = new com.swe.ordersservice.service.OrderServiceImpl(
+                    orderRepository, outboxEventRepository, outboxEventFactory, processedEventRepository, orderMetrics, afterCommitExecutor
             );
 
             UUID reservedEventId = UUID.randomUUID();

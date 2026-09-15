@@ -15,6 +15,9 @@ import com.swe.ordersservice.outbox.OutboxEventFactory;
 import com.swe.ordersservice.outbox.OutboxEventRepository;
 import com.swe.ordersservice.repository.OrderRepository;
 import com.swe.ordersservice.repository.ProcessedEventRepository;
+import com.swe.ordersservice.metrics.AfterCommitExecutor;
+import com.swe.ordersservice.metrics.OrderMetrics;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -50,8 +53,23 @@ class OrderServiceImplTest {
     @Mock
     private ProcessedEventRepository processedEventRepository;
 
+    @Mock
+    private OrderMetrics orderMetrics;
+
+    @Mock
+    private AfterCommitExecutor afterCommitExecutor;
+
     @InjectMocks
     private OrderServiceImpl orderService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().doAnswer(invocation -> {
+            Runnable action = invocation.getArgument(0);
+            action.run();
+            return null;
+        }).when(afterCommitExecutor).execute(any());
+    }
 
     @Nested
     @DisplayName("createOrder")
@@ -141,6 +159,8 @@ class OrderServiceImplTest {
                         .containsExactlyInAnyOrder(product1Id, product2Id);
 
                 verify(outboxEventRepository).save(mockOutboxEvent);
+                verify(afterCommitExecutor).execute(any());
+                verify(orderMetrics).orderCreated();
             } finally {
                 org.slf4j.MDC.remove("correlationId");
             }
@@ -341,6 +361,8 @@ class OrderServiceImplTest {
             ProcessedEvent capturedEvent = captor.getValue();
             assertThat(capturedEvent.getEventId()).isEqualTo(eventId);
             assertThat(capturedEvent.getProcessedAt()).isNotNull();
+            verify(afterCommitExecutor).execute(any());
+            verify(orderMetrics).orderConfirmed();
         }
 
         @Test
@@ -360,6 +382,7 @@ class OrderServiceImplTest {
             verify(processedEventRepository).existsById(eventId);
             verifyNoMoreInteractions(processedEventRepository);
             verifyNoInteractions(orderRepository);
+            verifyNoInteractions(orderMetrics);
         }
 
         @Test
@@ -380,6 +403,7 @@ class OrderServiceImplTest {
 
             verify(orderRepository).findById(nonExistentOrderId);
             verify(processedEventRepository, never()).save(any());
+            verifyNoInteractions(orderMetrics);
         }
 
         @Test
@@ -405,6 +429,7 @@ class OrderServiceImplTest {
                     .hasMessageContaining("cannot transition from CONFIRMED to CONFIRMED");
 
             verify(processedEventRepository, never()).save(any());
+            verifyNoInteractions(orderMetrics);
         }
     }
 
@@ -443,6 +468,8 @@ class OrderServiceImplTest {
             ProcessedEvent capturedEvent = captor.getValue();
             assertThat(capturedEvent.getEventId()).isEqualTo(eventId);
             assertThat(capturedEvent.getProcessedAt()).isNotNull();
+            verify(afterCommitExecutor).execute(any());
+            verify(orderMetrics).orderCancelled();
         }
 
         @Test
@@ -464,6 +491,7 @@ class OrderServiceImplTest {
             verify(processedEventRepository).existsById(eventId);
             verifyNoMoreInteractions(processedEventRepository);
             verifyNoInteractions(orderRepository);
+            verifyNoInteractions(orderMetrics);
         }
 
         @Test
@@ -486,6 +514,7 @@ class OrderServiceImplTest {
 
             verify(orderRepository).findById(nonExistentOrderId);
             verify(processedEventRepository, never()).save(any());
+            verifyNoInteractions(orderMetrics);
         }
 
         @Test
@@ -513,6 +542,7 @@ class OrderServiceImplTest {
                     .hasMessageContaining("cannot transition from CANCELLED to CANCELLED");
 
             verify(processedEventRepository, never()).save(any());
+            verifyNoInteractions(orderMetrics);
         }
     }
 }

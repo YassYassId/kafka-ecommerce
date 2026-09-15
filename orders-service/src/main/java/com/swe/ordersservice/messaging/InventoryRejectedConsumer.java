@@ -2,6 +2,7 @@ package com.swe.ordersservice.messaging;
 
 import com.swe.ordersservice.event.InventoryRejectedEvent;
 import com.swe.ordersservice.exception.InvalidEventException;
+import com.swe.ordersservice.metrics.KafkaMetrics;
 import com.swe.ordersservice.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ public class InventoryRejectedConsumer {
 
     private final OrderService orderService;
     private final ObjectMapper objectMapper;
+    private final KafkaMetrics kafkaMetrics;
 
     @KafkaListener(topics = "inventory.rejected", groupId = "orders-service")
     public void consume(@Header(KafkaHeaders.RECEIVED_KEY) String key,
@@ -36,6 +38,8 @@ public class InventoryRejectedConsumer {
 
             log.warn("Received InventoryReserved event without correlation ID. Generated fallback correlationId");
         }
+        long start = System.nanoTime();
+        String outcome = "success";
 
         try {
             MDC.put(MDC_KEY, correlationId);
@@ -49,9 +53,11 @@ public class InventoryRejectedConsumer {
 
             orderService.cancelOrder(event);
         } catch (JacksonException e) {
+            outcome = "failure";
             log.error("Error occurred while processing InventoryRejected event", e);
             throw new InvalidEventException("Failed to deserialize InventoryRejected event", e);
         } finally {
+            kafkaMetrics.recordProcessing("InventoryRejected", outcome, System.nanoTime() - start);
             MDC.remove(MDC_KEY);
             MDC.remove("eventId");
             MDC.remove("orderId");

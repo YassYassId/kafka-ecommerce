@@ -2,6 +2,7 @@ package com.swe.ordersservice.messaging;
 
 import com.swe.ordersservice.event.InventoryRejectedEvent;
 import com.swe.ordersservice.exception.InvalidEventException;
+import com.swe.ordersservice.metrics.KafkaMetrics;
 import com.swe.ordersservice.service.OrderService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -19,6 +20,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -26,6 +29,9 @@ class InventoryRejectedConsumerTest {
 
     @Mock
     private OrderService orderService;
+
+    @Mock
+    private KafkaMetrics kafkaMetrics;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -72,6 +78,8 @@ class InventoryRejectedConsumerTest {
             assertThat(capturedEvent.reason()).isEqualTo("INSUFFICIENT_STOCK");
             assertThat(capturedEvent.version()).isEqualTo(1);
             assertThat(capturedEvent.occurredAt()).isNotNull();
+
+            verify(kafkaMetrics).recordProcessing(eq("InventoryRejected"), eq("success"), anyLong());
         }
 
         @Test
@@ -84,6 +92,7 @@ class InventoryRejectedConsumerTest {
                     .hasMessageContaining("Failed to deserialize InventoryRejected event");
 
             verifyNoInteractions(orderService);
+            verify(kafkaMetrics).recordProcessing(eq("InventoryRejected"), eq("failure"), anyLong());
         }
     }
 }

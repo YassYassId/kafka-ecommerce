@@ -12,6 +12,8 @@ import com.swe.ordersservice.event.InventoryReservedEvent;
 import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.event.OrderCreatedItem;
 import com.swe.ordersservice.exception.OrderNotFoundException;
+import com.swe.ordersservice.metrics.AfterCommitExecutor;
+import com.swe.ordersservice.metrics.OrderMetrics;
 import com.swe.ordersservice.outbox.OutboxEvent;
 import com.swe.ordersservice.outbox.OutboxEventFactory;
 import com.swe.ordersservice.outbox.OutboxEventRepository;
@@ -36,6 +38,9 @@ public class OrderServiceImpl implements OrderService {
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxEventFactory outboxEventFactory;
     private final ProcessedEventRepository processedEventRepository;
+
+    private final OrderMetrics orderMetrics;
+    private final AfterCommitExecutor afterCommitExecutor;
 
     @Override
     @Transactional
@@ -96,6 +101,7 @@ public class OrderServiceImpl implements OrderService {
             MDC.remove("eventId");
         }
 
+        afterCommitExecutor.execute(orderMetrics::orderCreated);
         // 6. Return the API response
         return new OrderResponse(
                 savedOrder.getId(),
@@ -118,22 +124,36 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public void confirmOrder(InventoryReservedEvent event) {
-        updateOrderStatus(event.eventId(), event.orderId(), OrderStatus.CONFIRMED);
+        boolean transitioned = updateOrderStatus(event.eventId(), event.orderId(), OrderStatus.CONFIRMED);
+
+        if (!transitioned) {
+            return;
+        }
+
+        afterCommitExecutor.execute(orderMetrics::orderConfirmed);
+
         log.info("Order confirmed");
     }
 
     @Override
     @Transactional
     public void cancelOrder(InventoryRejectedEvent event) {
-        updateOrderStatus(event.eventId(), event.orderId(), OrderStatus.CANCELLED);
+        boolean transitioned = updateOrderStatus(event.eventId(), event.orderId(), OrderStatus.CANCELLED);
+
+        if (!transitioned) {
+            return;
+        }
+
+        afterCommitExecutor.execute(orderMetrics::orderCancelled);
+
         log.info("Order cancelled");
     }
 
-    private void updateOrderStatus(UUID eventId, UUID orderId, OrderStatus targetStatus) {
+    private boolean updateOrderStatus(UUID eventId, UUID orderId, OrderStatus targetStatus) {
         // Check if the event has already been processed (idempotency)
         if (processedEventRepository.existsById(eventId)) {
             log.debug("Skipping already processed order lifecycle event");
-            return;
+            return false;
         }
 
         // Fetch the order
@@ -154,5 +174,7 @@ public class OrderServiceImpl implements OrderService {
                 .eventId(eventId)
                 .processedAt(OffsetDateTime.now())
                 .build());
+
+        return true;
     }
 }
