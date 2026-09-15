@@ -8,12 +8,16 @@ import com.swe.notificationsservice.entity.NotificationType;
 import com.swe.notificationsservice.event.InventoryRejectedEvent;
 import com.swe.notificationsservice.event.InventoryReservedEvent;
 import com.swe.notificationsservice.exception.InvalidEventException;
+import com.swe.notificationsservice.metrics.AfterCommitExecutor;
+import com.swe.notificationsservice.metrics.KafkaMetrics;
+import com.swe.notificationsservice.metrics.NotificationMetrics;
 import com.swe.notificationsservice.repository.NotificationRepository;
 import com.swe.notificationsservice.service.NotificationService;
 import com.swe.notificationsservice.service.NotificationServiceImpl;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -55,10 +59,36 @@ class KafkaRetryStrategyTest {
     @Mock
     private MessageListenerContainer container;
 
+    @Mock
+    private KafkaMetrics kafkaMetrics;
+
+    @Mock
+    private NotificationMetrics notificationMetrics;
+
+    @Mock
+    private AfterCommitExecutor afterCommitExecutor;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
     private final KafkaConsumerConfig consumerConfig = new KafkaConsumerConfig();
+
+    @BeforeEach
+    void setUp() {
+        lenient().doAnswer(invocation -> {
+            Runnable action = invocation.getArgument(0);
+            action.run();
+            return null;
+        }).when(afterCommitExecutor).execute(any());
+
+        lenient().when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> {
+            Notification n = invocation.getArgument(0);
+            if (n.getId() == null) {
+                n.setId(UUID.randomUUID());
+            }
+            return n;
+        });
+    }
 
     @Nested
     @DisplayName("1. Temporary Processing Failure")
@@ -67,7 +97,7 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario 1: Consumer fails temporarily, retries and succeeds -> not sent to DLT")
         void shouldRetryAndSucceedWithoutSendingToDlt() throws Exception {
-            InventoryReservedConsumer reservedConsumer = new InventoryReservedConsumer(notificationService, objectMapper);
+            InventoryReservedConsumer reservedConsumer = new InventoryReservedConsumer(notificationService, objectMapper, kafkaMetrics);
 
             UUID orderId = UUID.randomUUID();
             InventoryReservedEvent event = new InventoryReservedEvent(
@@ -156,7 +186,7 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario A: Normal restart -> Stop consumer, publish another event, restart consumer, new event gets processed")
         void shouldProcessNewNotificationAfterConsumerRestart() throws Exception {
-            InventoryReservedConsumer reservedConsumer = new InventoryReservedConsumer(notificationService, objectMapper);
+            InventoryReservedConsumer reservedConsumer = new InventoryReservedConsumer(notificationService, objectMapper, kafkaMetrics);
 
             UUID orderId1 = UUID.randomUUID();
             InventoryReservedEvent event1 = new InventoryReservedEvent(
@@ -193,7 +223,7 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario B: Restart before offset commit / redelivery -> Same event delivered again, notification repository prevents duplicate row")
         void shouldPreventDuplicateNotificationWhenEventRedeliveredAfterRestart() {
-            NotificationServiceImpl service = new NotificationServiceImpl(notificationRepository);
+            NotificationServiceImpl service = new NotificationServiceImpl(notificationRepository, notificationMetrics, afterCommitExecutor);
 
             UUID eventId = UUID.randomUUID();
             UUID orderId = UUID.randomUUID();
@@ -234,7 +264,7 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario E: Notifications replay -> Replay same lifecycle events -> No second notification row")
         void shouldIgnoreReplayOfAlreadyHandledLifecycleEvents() {
-            NotificationServiceImpl service = new NotificationServiceImpl(notificationRepository);
+            NotificationServiceImpl service = new NotificationServiceImpl(notificationRepository, notificationMetrics, afterCommitExecutor);
 
             UUID reservedEventId = UUID.randomUUID();
             UUID rejectedEventId = UUID.randomUUID();

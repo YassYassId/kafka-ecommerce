@@ -5,7 +5,10 @@ import com.swe.notificationsservice.entity.NotificationStatus;
 import com.swe.notificationsservice.entity.NotificationType;
 import com.swe.notificationsservice.event.InventoryRejectedEvent;
 import com.swe.notificationsservice.event.InventoryReservedEvent;
+import com.swe.notificationsservice.metrics.AfterCommitExecutor;
+import com.swe.notificationsservice.metrics.NotificationMetrics;
 import com.swe.notificationsservice.repository.NotificationRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -29,8 +32,23 @@ class NotificationServiceImplTest {
     @Mock
     private NotificationRepository notificationRepository;
 
+    @Mock
+    private NotificationMetrics notificationMetrics;
+
+    @Mock
+    private AfterCommitExecutor afterCommitExecutor;
+
     @InjectMocks
     private NotificationServiceImpl notificationService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().doAnswer(invocation -> {
+            Runnable action = invocation.getArgument(0);
+            action.run();
+            return null;
+        }).when(afterCommitExecutor).execute(any());
+    }
 
     @Nested
     @DisplayName("handleInventoryReservedEvent")
@@ -44,6 +62,11 @@ class NotificationServiceImplTest {
             InventoryReservedEvent event = new InventoryReservedEvent(eventId, orderId, Instant.now(), 1);
 
             when(notificationRepository.findByEventId(eventId)).thenReturn(Optional.empty());
+            when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> {
+                Notification n = invocation.getArgument(0);
+                n.setId(UUID.randomUUID());
+                return n;
+            });
 
             notificationService.handleInventoryReservedEvent(event);
 
@@ -57,6 +80,9 @@ class NotificationServiceImplTest {
             assertThat(saved.getStatus()).isEqualTo(NotificationStatus.PENDING);
             assertThat(saved.getRecipient()).isEqualTo("customer x");
             assertThat(saved.getMessage()).isEqualTo("Your order " + orderId + " has been confirmed.");
+
+            verify(afterCommitExecutor).execute(any());
+            verify(notificationMetrics).created(NotificationType.ORDER_CONFIRMED);
         }
 
         @Test
@@ -79,6 +105,7 @@ class NotificationServiceImplTest {
             notificationService.handleInventoryReservedEvent(event);
 
             verify(notificationRepository, never()).save(any(Notification.class));
+            verifyNoInteractions(notificationMetrics);
         }
     }
 
@@ -97,6 +124,11 @@ class NotificationServiceImplTest {
             );
 
             when(notificationRepository.findByEventId(eventId)).thenReturn(Optional.empty());
+            when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> {
+                Notification n = invocation.getArgument(0);
+                n.setId(UUID.randomUUID());
+                return n;
+            });
 
             notificationService.handleInventoryRejectedEvent(event);
 
@@ -110,6 +142,9 @@ class NotificationServiceImplTest {
             assertThat(saved.getStatus()).isEqualTo(NotificationStatus.PENDING);
             assertThat(saved.getRecipient()).isEqualTo("customer x");
             assertThat(saved.getMessage()).isEqualTo("Your order " + orderId + " has been cancelled.");
+
+            verify(afterCommitExecutor).execute(any());
+            verify(notificationMetrics).created(NotificationType.ORDER_CANCELLED);
         }
 
         @Test
@@ -135,6 +170,7 @@ class NotificationServiceImplTest {
             notificationService.handleInventoryRejectedEvent(event);
 
             verify(notificationRepository, never()).save(any(Notification.class));
+            verifyNoInteractions(notificationMetrics);
         }
     }
 }

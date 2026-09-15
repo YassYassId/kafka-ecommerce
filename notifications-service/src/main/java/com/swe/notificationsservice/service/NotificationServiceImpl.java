@@ -5,6 +5,8 @@ import com.swe.notificationsservice.entity.NotificationStatus;
 import com.swe.notificationsservice.entity.NotificationType;
 import com.swe.notificationsservice.event.InventoryRejectedEvent;
 import com.swe.notificationsservice.event.InventoryReservedEvent;
+import com.swe.notificationsservice.metrics.AfterCommitExecutor;
+import com.swe.notificationsservice.metrics.NotificationMetrics;
 import com.swe.notificationsservice.repository.NotificationRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +23,9 @@ public class NotificationServiceImpl implements NotificationService {
 
     private final static String MDC_NOTIFICATION_ID = "notificationId";
     private final static String MDC_NOTIFICATION_TYPE = "notificationType";
+
+    private final NotificationMetrics notificationMetrics;
+    private final AfterCommitExecutor afterCommitExecutor;
 
     @Override
     @Transactional
@@ -40,6 +45,8 @@ public class NotificationServiceImpl implements NotificationService {
                 .build();
 
         Notification savedNotification = notificationRepository.save(notification);
+
+        afterCommitExecutor.execute(() -> notificationMetrics.created(savedNotification.getType()));
 
         try {
             MDC.put(MDC_NOTIFICATION_ID, savedNotification.getId().toString());
@@ -71,6 +78,9 @@ public class NotificationServiceImpl implements NotificationService {
                 .build();
 
         Notification savedNotification = notificationRepository.save(notification);
+
+        afterCommitExecutor.execute(() -> notificationMetrics.created(savedNotification.getType()));
+
         try {
             MDC.put(MDC_NOTIFICATION_ID, savedNotification.getId().toString());
             MDC.put(MDC_NOTIFICATION_TYPE, savedNotification.getType().name());

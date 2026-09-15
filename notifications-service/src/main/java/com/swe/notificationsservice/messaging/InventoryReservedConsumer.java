@@ -2,6 +2,7 @@ package com.swe.notificationsservice.messaging;
 
 import com.swe.notificationsservice.event.InventoryReservedEvent;
 import com.swe.notificationsservice.exception.InvalidEventException;
+import com.swe.notificationsservice.metrics.KafkaMetrics;
 import com.swe.notificationsservice.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,8 @@ public class InventoryReservedConsumer {
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
 
+    private final KafkaMetrics kafkaMetrics;
+
     @KafkaListener(topics = "inventory.reserved", groupId = "notifications-service")
     public void consume(@Header(KafkaHeaders.RECEIVED_KEY) String key,
                         @Payload String payload,
@@ -36,6 +39,9 @@ public class InventoryReservedConsumer {
 
             log.warn("Received InventoryReserved event without correlation ID. Generated fallback correlationId");
         }
+
+        long start = System.nanoTime();
+        String outcome = "success";
 
         try {
             MDC.put(MDC_KEY, correlationId);
@@ -49,9 +55,11 @@ public class InventoryReservedConsumer {
 
             notificationService.handleInventoryReservedEvent(event);
         } catch (JacksonException e) {
+            outcome = "failure";
             log.error("Error processing InventoryReserved event. key={}, payload={}, error={}", key, payload, e.getMessage(), e);
             throw new InvalidEventException("Failed to process InventoryReserved event", e);
         } finally {
+            kafkaMetrics.recordProcessing("InventoryReserved", outcome, System.nanoTime() - start);
             MDC.remove(MDC_KEY);
             MDC.remove("eventId");
             MDC.remove("orderId");

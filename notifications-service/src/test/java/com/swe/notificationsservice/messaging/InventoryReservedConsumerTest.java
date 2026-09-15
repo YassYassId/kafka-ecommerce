@@ -2,6 +2,7 @@ package com.swe.notificationsservice.messaging;
 
 import com.swe.notificationsservice.event.InventoryReservedEvent;
 import com.swe.notificationsservice.exception.InvalidEventException;
+import com.swe.notificationsservice.metrics.KafkaMetrics;
 import com.swe.notificationsservice.service.NotificationService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -19,6 +20,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -26,6 +29,9 @@ class InventoryReservedConsumerTest {
 
     @Mock
     private NotificationService notificationService;
+
+    @Mock
+    private KafkaMetrics kafkaMetrics;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -63,6 +69,8 @@ class InventoryReservedConsumerTest {
             assertThat(capturedEvent.orderId()).isEqualTo(orderId);
             assertThat(capturedEvent.version()).isEqualTo(1);
             assertThat(capturedEvent.occurredAt()).isNotNull();
+
+            verify(kafkaMetrics).recordProcessing(eq("InventoryReserved"), eq("success"), anyLong());
         }
 
         @Test
@@ -75,6 +83,7 @@ class InventoryReservedConsumerTest {
                     .hasMessageContaining("Failed to process InventoryReserved event");
 
             verifyNoInteractions(notificationService);
+            verify(kafkaMetrics).recordProcessing(eq("InventoryReserved"), eq("failure"), anyLong());
         }
     }
 }
