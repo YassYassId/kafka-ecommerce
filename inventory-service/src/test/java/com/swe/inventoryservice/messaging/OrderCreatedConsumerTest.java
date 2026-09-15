@@ -3,6 +3,7 @@ package com.swe.inventoryservice.messaging;
 import com.swe.inventoryservice.event.OrderCreatedEvent;
 import com.swe.inventoryservice.event.OrderCreatedItem;
 import com.swe.inventoryservice.exception.InvalidEventException;
+import com.swe.inventoryservice.metrics.KafkaMetrics;
 import com.swe.inventoryservice.service.InventoryService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -21,6 +22,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -28,6 +31,9 @@ class OrderCreatedConsumerTest {
 
     @Mock
     private InventoryService inventoryService;
+
+    @Mock
+    private KafkaMetrics kafkaMetrics;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -71,6 +77,8 @@ class OrderCreatedConsumerTest {
             assertThat(capturedEvent.items()).hasSize(1);
             assertThat(capturedEvent.items().getFirst().productId()).isEqualTo(productId);
             assertThat(capturedEvent.items().getFirst().quantity()).isEqualTo(2);
+
+            verify(kafkaMetrics).recordProcessing(eq("OrderCreated"), eq("success"), anyLong());
         }
 
         @Test
@@ -83,6 +91,7 @@ class OrderCreatedConsumerTest {
                     .hasMessageContaining("Failed to deserialize OrderCreated event");
 
             verifyNoInteractions(inventoryService);
+            verify(kafkaMetrics).recordProcessing(eq("OrderCreated"), eq("failure"), anyLong());
         }
     }
 }

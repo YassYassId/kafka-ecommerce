@@ -7,6 +7,8 @@ import com.swe.inventoryservice.event.InventoryReservedEvent;
 import com.swe.inventoryservice.event.OrderCreatedEvent;
 import com.swe.inventoryservice.event.OrderCreatedItem;
 import com.swe.inventoryservice.exception.InvalidEventException;
+import com.swe.inventoryservice.metrics.AfterCommitExecutor;
+import com.swe.inventoryservice.metrics.InventoryMetrics;
 import com.swe.inventoryservice.outbox.OutboxEvent;
 
 import com.swe.inventoryservice.outbox.OutboxEventRepository;
@@ -39,6 +41,9 @@ public class InventoryTransactionServiceImpl implements InventoryTransactionServ
     private final ProcessedEventRepository processedEventRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+
+    private final InventoryMetrics inventoryMetrics;
+    private final AfterCommitExecutor afterCommitExecutor;
 
     @Override
     @Retryable(retryFor = {
@@ -89,9 +94,11 @@ public class InventoryTransactionServiceImpl implements InventoryTransactionServ
 
         saveOutboxEvent(reservedEvent.eventId(), event.orderId(), "InventoryReserved", reservedEvent.version(), reservedEvent);
 
-        log.info("Inventory reservation completed");
-
         markAsProcessed(event);
+
+        afterCommitExecutor.execute(inventoryMetrics::reserved);
+
+        log.info("Inventory reservation completed");
     }
 
 
@@ -113,6 +120,8 @@ public class InventoryTransactionServiceImpl implements InventoryTransactionServ
                     rejectedEvent);
 
             markAsProcessed(sourceEvent);
+
+            afterCommitExecutor.execute(() -> inventoryMetrics.rejected(reason));
         } finally {
             MDC.remove("productId");
             MDC.remove("reason");

@@ -7,6 +7,9 @@ import com.swe.inventoryservice.entity.ProcessedEvent;
 import com.swe.inventoryservice.event.OrderCreatedEvent;
 import com.swe.inventoryservice.event.OrderCreatedItem;
 import com.swe.inventoryservice.exception.InvalidEventException;
+import com.swe.inventoryservice.metrics.AfterCommitExecutor;
+import com.swe.inventoryservice.metrics.InventoryMetrics;
+import com.swe.inventoryservice.metrics.KafkaMetrics;
 import com.swe.inventoryservice.outbox.OutboxEvent;
 import com.swe.inventoryservice.outbox.OutboxEventRepository;
 import com.swe.inventoryservice.repository.InventoryItemRepository;
@@ -16,6 +19,7 @@ import com.swe.inventoryservice.service.InventoryTransactionServiceImpl;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -65,10 +69,28 @@ class KafkaRetryStrategyTest {
     @Mock
     private MessageListenerContainer container;
 
+    @Mock
+    private KafkaMetrics kafkaMetrics;
+
+    @Mock
+    private InventoryMetrics inventoryMetrics;
+
+    @Mock
+    private AfterCommitExecutor afterCommitExecutor;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
     private final KafkaConsumerConfig consumerConfig = new KafkaConsumerConfig();
+
+    @BeforeEach
+    void setUp() {
+        lenient().doAnswer(invocation -> {
+            Runnable action = invocation.getArgument(0);
+            action.run();
+            return null;
+        }).when(afterCommitExecutor).execute(any());
+    }
 
     @Nested
     @DisplayName("1. Temporary Processing Failure")
@@ -77,7 +99,7 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario 1: Listener fails temporarily, retries and later succeeds -> not sent to DLT")
         void shouldRetryAndSucceedWithoutSendingToDlt() throws Exception {
-            OrderCreatedConsumer orderCreatedConsumer = new OrderCreatedConsumer(inventoryService, objectMapper);
+            OrderCreatedConsumer orderCreatedConsumer = new OrderCreatedConsumer(inventoryService, objectMapper, kafkaMetrics);
 
             UUID eventId = UUID.randomUUID();
             UUID orderId = UUID.randomUUID();
@@ -147,7 +169,7 @@ class KafkaRetryStrategyTest {
         @DisplayName("Scenario 3: Stock insufficient -> InventoryRejected produced to outbox, no exception, no Kafka retry")
         void shouldProduceInventoryRejectedWithoutTriggeringKafkaRetry() {
             InventoryTransactionServiceImpl transactionService = new InventoryTransactionServiceImpl(
-                    inventoryItemRepository, processedEventRepository, outboxEventRepository, objectMapper
+                    inventoryItemRepository, processedEventRepository, outboxEventRepository, objectMapper, inventoryMetrics, afterCommitExecutor
             );
 
             UUID eventId = UUID.randomUUID();
@@ -198,7 +220,7 @@ class KafkaRetryStrategyTest {
         @Test
         @DisplayName("Scenario A: Normal restart -> Stop consumer, publish another event, restart consumer, new event gets processed")
         void shouldProcessNewEventAfterConsumerRestart() throws Exception {
-            OrderCreatedConsumer orderCreatedConsumer = new OrderCreatedConsumer(inventoryService, objectMapper);
+            OrderCreatedConsumer orderCreatedConsumer = new OrderCreatedConsumer(inventoryService, objectMapper, kafkaMetrics);
 
             UUID orderId1 = UUID.randomUUID();
             OrderCreatedEvent event1 = new OrderCreatedEvent(
@@ -240,7 +262,7 @@ class KafkaRetryStrategyTest {
         @DisplayName("Scenario B: Restart before offset commit / redelivery -> Same event delivered again, processed_events prevents duplicate side effect")
         void shouldPreventDuplicateSideEffectWhenRestartBeforeOffsetCommitOccurs() {
             InventoryTransactionServiceImpl transactionService = new InventoryTransactionServiceImpl(
-                    inventoryItemRepository, processedEventRepository, outboxEventRepository, objectMapper
+                    inventoryItemRepository, processedEventRepository, outboxEventRepository, objectMapper, inventoryMetrics, afterCommitExecutor
             );
 
             UUID eventId = UUID.randomUUID();
@@ -290,7 +312,7 @@ class KafkaRetryStrategyTest {
         @DisplayName("Scenario C: Manual replay -> Republish an already processed event with same eventId -> No duplicate stock reservation, no extra outbox event")
         void shouldPreventDuplicateReservationOnManualEventReplay() {
             InventoryTransactionServiceImpl transactionService = new InventoryTransactionServiceImpl(
-                    inventoryItemRepository, processedEventRepository, outboxEventRepository, objectMapper
+                    inventoryItemRepository, processedEventRepository, outboxEventRepository, objectMapper, inventoryMetrics, afterCommitExecutor
             );
 
             UUID eventId = UUID.randomUUID();

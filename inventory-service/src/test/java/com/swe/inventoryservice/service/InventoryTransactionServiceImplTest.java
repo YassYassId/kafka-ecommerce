@@ -10,6 +10,9 @@ import com.swe.inventoryservice.outbox.OutboxEvent;
 import com.swe.inventoryservice.outbox.OutboxEventRepository;
 import com.swe.inventoryservice.repository.InventoryItemRepository;
 import com.swe.inventoryservice.repository.ProcessedEventRepository;
+import com.swe.inventoryservice.metrics.AfterCommitExecutor;
+import com.swe.inventoryservice.metrics.InventoryMetrics;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -42,11 +45,26 @@ class InventoryTransactionServiceImplTest {
     @Mock
     private OutboxEventRepository outboxEventRepository;
 
+    @Mock
+    private InventoryMetrics inventoryMetrics;
+
+    @Mock
+    private AfterCommitExecutor afterCommitExecutor;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private InventoryTransactionServiceImpl inventoryTransactionService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().doAnswer(invocation -> {
+            Runnable action = invocation.getArgument(0);
+            action.run();
+            return null;
+        }).when(afterCommitExecutor).execute(any());
+    }
 
     @Nested
     @DisplayName("process")
@@ -73,6 +91,7 @@ class InventoryTransactionServiceImplTest {
             verifyNoInteractions(repository);
             verifyNoInteractions(outboxEventRepository);
             verify(processedEventRepository, never()).save(any(ProcessedEvent.class));
+            verifyNoInteractions(inventoryMetrics);
         }
 
         @Test
@@ -123,6 +142,9 @@ class InventoryTransactionServiceImplTest {
             ProcessedEvent savedEvent = eventCaptor.getValue();
             assertThat(savedEvent.getEventId()).isEqualTo(eventId);
             assertThat(savedEvent.getProcessedAt()).isNotNull();
+
+            verify(afterCommitExecutor).execute(any());
+            verify(inventoryMetrics).reserved();
         }
 
         @Test
@@ -178,6 +200,8 @@ class InventoryTransactionServiceImplTest {
             assertThat(outboxCaptor.getValue().getEventType()).isEqualTo("InventoryReserved");
 
             verify(processedEventRepository).save(any(ProcessedEvent.class));
+            verify(afterCommitExecutor).execute(any());
+            verify(inventoryMetrics).reserved();
         }
 
         @Test
@@ -211,6 +235,8 @@ class InventoryTransactionServiceImplTest {
             assertThat(savedOutbox.getPayload()).contains(missingProductId.toString());
 
             verify(processedEventRepository).save(any(ProcessedEvent.class));
+            verify(afterCommitExecutor).execute(any());
+            verify(inventoryMetrics).rejected("PRODUCT_NOT_FOUND");
         }
 
         @Test
@@ -255,6 +281,8 @@ class InventoryTransactionServiceImplTest {
             assertThat(savedOutbox.getPayload()).contains("INSUFFICIENT_STOCK");
 
             verify(processedEventRepository).save(any(ProcessedEvent.class));
+            verify(afterCommitExecutor).execute(any());
+            verify(inventoryMetrics).rejected("INSUFFICIENT_STOCK");
         }
     }
 }
