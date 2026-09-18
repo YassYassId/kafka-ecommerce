@@ -142,6 +142,29 @@ services:
     networks:
       - event-driven-network
 
+
+  # =====================================================
+  # Catalog PostgreSQL
+  # =====================================================
+  catalog-db:
+    image: postgres:16
+    container_name: catalog-db
+    environment:
+      POSTGRES_DB: catalog
+      POSTGRES_USER: catalog_user
+      POSTGRES_PASSWORD: catalog_password
+    ports:
+      - "5436:5432"
+    volumes:
+      - catalog-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U catalog_user -d catalog" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - event-driven-network
+
     # =====================================================
     # Monitoring
     # =====================================================
@@ -217,6 +240,7 @@ volumes:
   orders-db-data:
   inventory-db-data:
   notifications-db-data:
+  catalog-data:
   prometheus-data:
   grafana-data:
 
