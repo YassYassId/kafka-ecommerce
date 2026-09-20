@@ -15,7 +15,7 @@ public interface ProductService {
 
     ProductResponse getProduct(UUID id);
 
-    Page<ProductResponse> getProducts(String category, ProductStatus status, Pageable pageable);
+    Page<ProductResponse> getProducts(String name, String category, ProductStatus status, Pageable pageable);
 
     ProductResponse updateProduct(UUID id, UpdateProductRequest request);
 

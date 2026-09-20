@@ -6,6 +6,7 @@ import com.swe.catalogservice.dto.UpdateProductRequest;
 import com.swe.catalogservice.entity.Product;
 import com.swe.catalogservice.entity.ProductStatus;
 import com.swe.catalogservice.exception.DuplicateSkuException;
+import com.swe.catalogservice.exception.ProductNotFoundException;
 import com.swe.catalogservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -60,13 +61,24 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public ProductResponse getProduct(UUID id) {
-        return null;
+
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new ProductNotFoundException(id));
+
+        return toResponse(product);
     }
 
-    @Override
-    public Page<ProductResponse> getProducts(String category, ProductStatus status, Pageable pageable) {
-        return null;
+    @Transactional(readOnly = true)
+    public Page<ProductResponse> getProducts(String name, String category, ProductStatus status, Pageable pageable) {
+
+        String nameFilter = name == null || name.isBlank() ? null : "%" + name.trim().toLowerCase() + "%";
+
+        String normalizedCategory = category == null || category.isBlank() ? null : category.trim();
+
+        return productRepository.findAllFiltered(nameFilter, normalizedCategory, status, pageable)
+                .map(this::toResponse);
     }
 
     @Override
