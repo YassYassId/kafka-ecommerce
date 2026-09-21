@@ -3,6 +3,7 @@ package com.swe.catalogservice.controller;
 import tools.jackson.databind.ObjectMapper;
 import com.swe.catalogservice.dto.CreateProductRequest;
 import com.swe.catalogservice.dto.ProductResponse;
+import com.swe.catalogservice.dto.UpdateProductRequest;
 import com.swe.catalogservice.entity.ProductStatus;
 import com.swe.catalogservice.exception.DuplicateSkuException;
 import com.swe.catalogservice.exception.GlobalExceptionHandler;
@@ -36,7 +37,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -411,6 +414,321 @@ class ProductControllerTest {
                     .andExpect(jsonPath("$.totalElements").value(0));
 
             verify(productService).getProducts(eq("keyboard"), eq("Electronics"), eq(ProductStatus.ACTIVE), any(Pageable.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("PUT /api/v1/products/{id}")
+    class UpdateProductTests {
+
+        @Test
+        @DisplayName("should return 200 OK and updated product when request is valid")
+        void updateProduct_WhenValidRequest_ShouldReturn200Ok() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "Updated Gaming Laptop",
+                    "Updated description with more RAM",
+                    "Electronics",
+                    new BigDecimal("1499.99"),
+                    "EUR"
+            );
+
+            ProductResponse response = new ProductResponse(
+                    productId,
+                    "LAPTOP-001",
+                    "Updated Gaming Laptop",
+                    "Updated description with more RAM",
+                    "Electronics",
+                    new BigDecimal("1499.99"),
+                    "EUR",
+                    ProductStatus.ACTIVE,
+                    OffsetDateTime.now().minusDays(1),
+                    OffsetDateTime.now()
+            );
+
+            when(productService.updateProduct(eq(productId), any(UpdateProductRequest.class))).thenReturn(response);
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(productId.toString()))
+                    .andExpect(jsonPath("$.sku").value("LAPTOP-001"))
+                    .andExpect(jsonPath("$.name").value("Updated Gaming Laptop"))
+                    .andExpect(jsonPath("$.description").value("Updated description with more RAM"))
+                    .andExpect(jsonPath("$.category").value("Electronics"))
+                    .andExpect(jsonPath("$.price").value(1499.99))
+                    .andExpect(jsonPath("$.currency").value("EUR"))
+                    .andExpect(jsonPath("$.status").value("ACTIVE"))
+                    .andExpect(jsonPath("$.createdAt").exists())
+                    .andExpect(jsonPath("$.updatedAt").exists());
+
+            verify(productService).updateProduct(eq(productId), any(UpdateProductRequest.class));
+        }
+
+        @Test
+        @DisplayName("should return 404 Not Found when product does not exist")
+        void updateProduct_WhenProductNotFound_ShouldReturn404NotFound() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "Updated Gaming Laptop",
+                    "Updated description",
+                    "Electronics",
+                    new BigDecimal("1499.99"),
+                    "EUR"
+            );
+
+            when(productService.updateProduct(eq(productId), any(UpdateProductRequest.class)))
+                    .thenThrow(new ProductNotFoundException(productId));
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.status").value(404))
+                    .andExpect(jsonPath("$.error").value("Not Found"))
+                    .andExpect(jsonPath("$.message").value("Product with ID: '" + productId + "' was not found"))
+                    .andExpect(jsonPath("$.path").value(BASE_URL + "/" + productId));
+
+            verify(productService).updateProduct(eq(productId), any(UpdateProductRequest.class));
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when name is blank")
+        void updateProduct_WhenNameIsBlank_ShouldReturn400BadRequest() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "",
+                    "Updated description",
+                    "Electronics",
+                    new BigDecimal("1499.99"),
+                    "USD"
+            );
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("name")));
+
+            verifyNoInteractions(productService);
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when name exceeds max size")
+        void updateProduct_WhenNameExceedsMaxSize_ShouldReturn400BadRequest() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "a".repeat(256),
+                    "Updated description",
+                    "Electronics",
+                    new BigDecimal("1499.99"),
+                    "USD"
+            );
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("name")));
+
+            verifyNoInteractions(productService);
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when category is blank")
+        void updateProduct_WhenCategoryIsBlank_ShouldReturn400BadRequest() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "Laptop",
+                    "Updated description",
+                    " ",
+                    new BigDecimal("1499.99"),
+                    "USD"
+            );
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("category")));
+
+            verifyNoInteractions(productService);
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when category exceeds max size")
+        void updateProduct_WhenCategoryExceedsMaxSize_ShouldReturn400BadRequest() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "Laptop",
+                    "Updated description",
+                    "a".repeat(101),
+                    new BigDecimal("1499.99"),
+                    "USD"
+            );
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("category")));
+
+            verifyNoInteractions(productService);
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when price is null")
+        void updateProduct_WhenPriceIsNull_ShouldReturn400BadRequest() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "Laptop",
+                    "Updated description",
+                    "Electronics",
+                    null,
+                    "USD"
+            );
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("price")));
+
+            verifyNoInteractions(productService);
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when price is negative")
+        void updateProduct_WhenPriceIsNegative_ShouldReturn400BadRequest() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "Laptop",
+                    "Updated description",
+                    "Electronics",
+                    new BigDecimal("-1.00"),
+                    "USD"
+            );
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("price")));
+
+            verifyNoInteractions(productService);
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when currency is invalid format")
+        void updateProduct_WhenCurrencyIsInvalid_ShouldReturn400BadRequest() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "Laptop",
+                    "Updated description",
+                    "Electronics",
+                    new BigDecimal("1499.99"),
+                    "us"
+            );
+
+            // Act & Assert
+            mockMvc.perform(put(BASE_URL + "/{id}", productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("currency")));
+
+            verifyNoInteractions(productService);
+        }
+    }
+
+    @Nested
+    @DisplayName("PATCH /api/v1/products/{id}/retire")
+    class RetireProductTests {
+
+        @Test
+        @DisplayName("should return 200 OK and retired product when product exists")
+        void retireProduct_WhenProductExists_ShouldReturn200Ok() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            ProductResponse response = new ProductResponse(
+                    productId,
+                    "SKU-RETIRE-01",
+                    "Discontinued Keyboard",
+                    "Legacy keyboard description",
+                    "Accessories",
+                    new BigDecimal("39.99"),
+                    "USD",
+                    ProductStatus.RETIRED,
+                    OffsetDateTime.now().minusDays(5),
+                    OffsetDateTime.now()
+            );
+
+            when(productService.retireProduct(productId)).thenReturn(response);
+
+            // Act & Assert
+            mockMvc.perform(patch(BASE_URL + "/{id}/retire", productId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(productId.toString()))
+                    .andExpect(jsonPath("$.sku").value("SKU-RETIRE-01"))
+                    .andExpect(jsonPath("$.name").value("Discontinued Keyboard"))
+                    .andExpect(jsonPath("$.status").value("RETIRED"))
+                    .andExpect(jsonPath("$.price").value(39.99))
+                    .andExpect(jsonPath("$.currency").value("USD"))
+                    .andExpect(jsonPath("$.createdAt").exists())
+                    .andExpect(jsonPath("$.updatedAt").exists());
+
+            verify(productService).retireProduct(productId);
+        }
+
+        @Test
+        @DisplayName("should return 404 Not Found when product does not exist")
+        void retireProduct_WhenProductNotFound_ShouldReturn404NotFound() throws Exception {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            when(productService.retireProduct(productId))
+                    .thenThrow(new ProductNotFoundException(productId));
+
+            // Act & Assert
+            mockMvc.perform(patch(BASE_URL + "/{id}/retire", productId))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.status").value(404))
+                    .andExpect(jsonPath("$.error").value("Not Found"))
+                    .andExpect(jsonPath("$.message").value("Product with ID: '" + productId + "' was not found"))
+                    .andExpect(jsonPath("$.path").value(BASE_URL + "/" + productId + "/retire"));
+
+            verify(productService).retireProduct(productId);
         }
     }
 }

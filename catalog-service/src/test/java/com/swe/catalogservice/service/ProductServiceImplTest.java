@@ -2,6 +2,7 @@ package com.swe.catalogservice.service;
 
 import com.swe.catalogservice.dto.CreateProductRequest;
 import com.swe.catalogservice.dto.ProductResponse;
+import com.swe.catalogservice.dto.UpdateProductRequest;
 import com.swe.catalogservice.entity.Product;
 import com.swe.catalogservice.entity.ProductStatus;
 import com.swe.catalogservice.exception.DuplicateSkuException;
@@ -268,6 +269,181 @@ class ProductServiceImplTest {
             assertThat(result).isNotNull();
             assertThat(result.getContent()).isEmpty();
             verify(productRepository).findAllFiltered(null, null, null, pageable);
+        }
+    }
+
+    @Nested
+    @DisplayName("updateProduct")
+    class UpdateProductTests {
+
+        @Test
+        @DisplayName("should update product fields, normalize strings, and return updated response")
+        void shouldUpdateProductSuccessfully() {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            OffsetDateTime createdAt = OffsetDateTime.now().minusDays(1);
+            OffsetDateTime updatedAt = OffsetDateTime.now();
+
+            Product existingProduct = Product.builder()
+                    .id(productId)
+                    .sku("SKU-ORIGINAL-01")
+                    .name("Old Product Name")
+                    .description("Old Description")
+                    .category("Old Category")
+                    .price(new BigDecimal("19.99"))
+                    .currency("USD")
+                    .status(ProductStatus.ACTIVE)
+                    .createdAt(createdAt)
+                    .updatedAt(updatedAt)
+                    .build();
+
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "  New Product Name  ",
+                    "Updated Description",
+                    "  Electronics  ",
+                    new BigDecimal("49.99"),
+                    "  eur  "
+            );
+
+            when(productRepository.findById(productId)).thenReturn(Optional.of(existingProduct));
+
+            // Act
+            ProductResponse response = productService.updateProduct(productId, request);
+
+            // Assert
+            assertThat(existingProduct.getName()).isEqualTo("New Product Name");
+            assertThat(existingProduct.getDescription()).isEqualTo("Updated Description");
+            assertThat(existingProduct.getCategory()).isEqualTo("Electronics");
+            assertThat(existingProduct.getPrice()).isEqualByComparingTo("49.99");
+            assertThat(existingProduct.getCurrency()).isEqualTo("EUR");
+            assertThat(existingProduct.getSku()).isEqualTo("SKU-ORIGINAL-01");
+            assertThat(existingProduct.getStatus()).isEqualTo(ProductStatus.ACTIVE);
+
+            assertThat(response).isNotNull();
+            assertThat(response.id()).isEqualTo(productId);
+            assertThat(response.sku()).isEqualTo("SKU-ORIGINAL-01");
+            assertThat(response.name()).isEqualTo("New Product Name");
+            assertThat(response.description()).isEqualTo("Updated Description");
+            assertThat(response.category()).isEqualTo("Electronics");
+            assertThat(response.price()).isEqualByComparingTo("49.99");
+            assertThat(response.currency()).isEqualTo("EUR");
+            assertThat(response.status()).isEqualTo(ProductStatus.ACTIVE);
+            assertThat(response.createdAt()).isEqualTo(createdAt);
+
+            verify(productRepository).findById(productId);
+        }
+
+        @Test
+        @DisplayName("should throw ProductNotFoundException when product to update does not exist")
+        void shouldThrowProductNotFoundExceptionWhenProductNotFound() {
+            // Arrange
+            UUID nonExistentId = UUID.randomUUID();
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "New Name",
+                    "New Description",
+                    "Electronics",
+                    new BigDecimal("49.99"),
+                    "USD"
+            );
+
+            when(productRepository.findById(nonExistentId)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThatThrownBy(() -> productService.updateProduct(nonExistentId, request))
+                    .isInstanceOf(ProductNotFoundException.class)
+                    .hasMessage("Product with ID: '" + nonExistentId + "' was not found");
+
+            verify(productRepository).findById(nonExistentId);
+        }
+    }
+
+    @Nested
+    @DisplayName("retireProduct")
+    class RetireProductTests {
+
+        @Test
+        @DisplayName("should set product status to RETIRED when active product exists")
+        void shouldRetireActiveProductSuccessfully() {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            OffsetDateTime createdAt = OffsetDateTime.now().minusDays(2);
+            OffsetDateTime updatedAt = OffsetDateTime.now().minusDays(1);
+
+            Product product = Product.builder()
+                    .id(productId)
+                    .sku("SKU-RETIRE-01")
+                    .name("Active Item")
+                    .description("Item to retire")
+                    .category("Electronics")
+                    .price(new BigDecimal("99.99"))
+                    .currency("USD")
+                    .status(ProductStatus.ACTIVE)
+                    .createdAt(createdAt)
+                    .updatedAt(updatedAt)
+                    .build();
+
+            when(productRepository.findById(productId)).thenReturn(Optional.of(product));
+
+            // Act
+            ProductResponse response = productService.retireProduct(productId);
+
+            // Assert
+            assertThat(product.getStatus()).isEqualTo(ProductStatus.RETIRED);
+            assertThat(response).isNotNull();
+            assertThat(response.id()).isEqualTo(productId);
+            assertThat(response.status()).isEqualTo(ProductStatus.RETIRED);
+            assertThat(response.sku()).isEqualTo("SKU-RETIRE-01");
+            assertThat(response.name()).isEqualTo("Active Item");
+
+            verify(productRepository).findById(productId);
+        }
+
+        @Test
+        @DisplayName("should remain RETIRED when retiring an already retired product")
+        void shouldRemainRetiredWhenAlreadyRetired() {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            OffsetDateTime now = OffsetDateTime.now();
+
+            Product product = Product.builder()
+                    .id(productId)
+                    .sku("SKU-RETIRE-02")
+                    .name("Already Retired Item")
+                    .description("Already retired")
+                    .category("Electronics")
+                    .price(new BigDecimal("50.00"))
+                    .currency("USD")
+                    .status(ProductStatus.RETIRED)
+                    .createdAt(now.minusDays(5))
+                    .updatedAt(now.minusDays(1))
+                    .build();
+
+            when(productRepository.findById(productId)).thenReturn(Optional.of(product));
+
+            // Act
+            ProductResponse response = productService.retireProduct(productId);
+
+            // Assert
+            assertThat(product.getStatus()).isEqualTo(ProductStatus.RETIRED);
+            assertThat(response).isNotNull();
+            assertThat(response.status()).isEqualTo(ProductStatus.RETIRED);
+
+            verify(productRepository).findById(productId);
+        }
+
+        @Test
+        @DisplayName("should throw ProductNotFoundException when product to retire does not exist")
+        void shouldThrowProductNotFoundExceptionWhenProductNotFound() {
+            // Arrange
+            UUID nonExistentId = UUID.randomUUID();
+            when(productRepository.findById(nonExistentId)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThatThrownBy(() -> productService.retireProduct(nonExistentId))
+                    .isInstanceOf(ProductNotFoundException.class)
+                    .hasMessage("Product with ID: '" + nonExistentId + "' was not found");
+
+            verify(productRepository).findById(nonExistentId);
         }
     }
 }

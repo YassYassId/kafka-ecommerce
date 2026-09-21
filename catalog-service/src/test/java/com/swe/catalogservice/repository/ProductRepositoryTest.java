@@ -236,4 +236,69 @@ class ProductRepositoryTest {
         assertThat(retiredResult.getContent()).hasSize(1);
         assertThat(retiredResult.getContent().getFirst().getSku()).isEqualTo("SKU-" + prefix + "-D");
     }
+
+    @Test
+    @DisplayName("should update product fields successfully")
+    void shouldUpdateProductFields() {
+        // Arrange
+        String uniqueSku = "SKU-UPDATE-" + UUID.randomUUID().toString().substring(0, 8);
+        Product product = Product.builder()
+                .sku(uniqueSku)
+                .name("Original Name")
+                .description("Original Description")
+                .category("Original Category")
+                .price(new BigDecimal("10.00"))
+                .currency("USD")
+                .status(ProductStatus.ACTIVE)
+                .build();
+
+        Product savedProduct = productRepository.saveAndFlush(product);
+        UUID productId = savedProduct.getId();
+
+        // Act
+        savedProduct.setName("Updated Name");
+        savedProduct.setDescription("Updated Description");
+        savedProduct.setCategory("Updated Category");
+        savedProduct.setPrice(new BigDecimal("25.00"));
+        savedProduct.setCurrency("EUR");
+        productRepository.saveAndFlush(savedProduct);
+        entityManager.clear();
+
+        // Assert
+        Optional<Product> updated = productRepository.findById(productId);
+        assertThat(updated).isPresent();
+        assertThat(updated.get().getName()).isEqualTo("Updated Name");
+        assertThat(updated.get().getDescription()).isEqualTo("Updated Description");
+        assertThat(updated.get().getCategory()).isEqualTo("Updated Category");
+        assertThat(updated.get().getPrice()).isEqualByComparingTo("25.00");
+        assertThat(updated.get().getCurrency()).isEqualTo("EUR");
+    }
+
+    @Test
+    @DisplayName("should update product status to RETIRED successfully")
+    void shouldRetireProductSuccessfully() {
+        // Arrange
+        String uniqueSku = "SKU-RETIRE-" + UUID.randomUUID().toString().substring(0, 8);
+        Product product = Product.builder()
+                .sku(uniqueSku)
+                .name("Retiring Item")
+                .category("Electronics")
+                .price(new BigDecimal("99.99"))
+                .currency("USD")
+                .status(ProductStatus.ACTIVE)
+                .build();
+
+        Product savedProduct = productRepository.saveAndFlush(product);
+        UUID productId = savedProduct.getId();
+
+        // Act
+        savedProduct.setStatus(ProductStatus.RETIRED);
+        productRepository.saveAndFlush(savedProduct);
+        entityManager.clear();
+
+        // Assert
+        Optional<Product> found = productRepository.findById(productId);
+        assertThat(found).isPresent();
+        assertThat(found.get().getStatus()).isEqualTo(ProductStatus.RETIRED);
+    }
 }
