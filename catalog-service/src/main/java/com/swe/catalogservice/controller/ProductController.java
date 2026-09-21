@@ -2,6 +2,7 @@ package com.swe.catalogservice.controller;
 
 import com.swe.catalogservice.dto.CreateProductRequest;
 import com.swe.catalogservice.dto.ProductResponse;
+import com.swe.catalogservice.dto.UpdateProductRequest;
 import com.swe.catalogservice.entity.ProductStatus;
 import com.swe.catalogservice.service.ProductService;
 import jakarta.validation.Valid;
@@ -48,5 +49,20 @@ public class ProductController {
             Pageable pageable) {
 
         return ResponseEntity.ok(productService.getProducts(name, category, status, pageable));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<ProductResponse> updateProduct(
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateProductRequest request
+    ) {
+        return ResponseEntity.ok(
+                productService.updateProduct(id, request)
+        );
+    }
+
+    @PatchMapping("/{id}/retire")
+    public ResponseEntity<ProductResponse> retireProduct(@PathVariable UUID id) {
+        return ResponseEntity.ok(productService.retireProduct(id));
     }
 }

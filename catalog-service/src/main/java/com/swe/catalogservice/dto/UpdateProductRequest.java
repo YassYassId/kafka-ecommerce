@@ -20,7 +20,7 @@ public record UpdateProductRequest(
         BigDecimal price,
 
         @NotBlank
-        @Pattern(regexp = "^[A-Z]{3}$")
+        @Pattern(regexp = "^[A-Za-z]{3}$")
         String currency
 ) {
 }

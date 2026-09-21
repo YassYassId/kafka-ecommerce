@@ -82,12 +82,31 @@ public class ProductServiceImpl implements ProductService {
     }
 
     @Override
+    @Transactional
     public ProductResponse updateProduct(UUID id, UpdateProductRequest request) {
-        return null;
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new ProductNotFoundException(id));
+
+        product.setName(request.name().trim());
+        product.setDescription(request.description());
+        product.setCategory(request.category().trim());
+        product.setPrice(request.price());
+        product.setCurrency(request.currency().trim().toUpperCase());
+
+        return toResponse(product);
     }
 
     @Override
+    @Transactional
     public ProductResponse retireProduct(UUID id) {
-        return null;
+
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new ProductNotFoundException(id));
+
+        if (product.getStatus() == ProductStatus.ACTIVE) {
+            product.setStatus(ProductStatus.RETIRED);
+        }
+
+        return toResponse(product);
     }
 }
