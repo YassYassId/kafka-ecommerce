@@ -5,8 +5,10 @@ import com.swe.catalogservice.dto.ProductResponse;
 import com.swe.catalogservice.dto.UpdateProductRequest;
 import com.swe.catalogservice.entity.Product;
 import com.swe.catalogservice.entity.ProductStatus;
+import com.swe.catalogservice.event.ProductCreatedEvent;
 import com.swe.catalogservice.exception.DuplicateSkuException;
 import com.swe.catalogservice.exception.ProductNotFoundException;
+import com.swe.catalogservice.outbox.OutboxService;
 import com.swe.catalogservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -14,6 +16,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @Service
@@ -21,6 +24,7 @@ import java.util.UUID;
 public class ProductServiceImpl implements ProductService {
 
     private final ProductRepository productRepository;
+    private final OutboxService outboxService;
 
     @Override
     @Transactional
@@ -42,6 +46,16 @@ public class ProductServiceImpl implements ProductService {
                 .build();
 
         Product savedProduct = productRepository.save(product);
+
+        UUID eventId = UUID.randomUUID();
+        OffsetDateTime occurredAt = OffsetDateTime.now();
+
+        ProductCreatedEvent event = new ProductCreatedEvent(eventId, savedProduct.getId(), savedProduct.getSku(), savedProduct.getName(),
+                savedProduct.getDescription(), savedProduct.getCategory(), savedProduct.getPrice(), savedProduct.getCurrency(), occurredAt,
+                1);
+
+        outboxService.saveEvent(eventId, savedProduct.getId(), "ProductCreated", occurredAt, event);
+
         return toResponse(savedProduct);
     }
 
