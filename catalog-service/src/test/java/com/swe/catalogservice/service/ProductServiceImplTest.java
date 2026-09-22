@@ -5,8 +5,10 @@ import com.swe.catalogservice.dto.ProductResponse;
 import com.swe.catalogservice.dto.UpdateProductRequest;
 import com.swe.catalogservice.entity.Product;
 import com.swe.catalogservice.entity.ProductStatus;
+import com.swe.catalogservice.event.ProductCreatedEvent;
 import com.swe.catalogservice.exception.DuplicateSkuException;
 import com.swe.catalogservice.exception.ProductNotFoundException;
+import com.swe.catalogservice.outbox.OutboxService;
 import com.swe.catalogservice.repository.ProductRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -42,6 +44,9 @@ class ProductServiceImplTest {
 
     @Mock
     private ProductRepository productRepository;
+
+    @Mock
+    private OutboxService outboxService;
 
     @InjectMocks
     private ProductServiceImpl productService;
@@ -91,6 +96,37 @@ class ProductServiceImplTest {
             assertThat(capturedProduct.getCurrency()).isEqualTo("USD");
             assertThat(capturedProduct.getStatus()).isEqualTo(ProductStatus.ACTIVE);
 
+            ArgumentCaptor<UUID> eventIdCaptor = ArgumentCaptor.forClass(UUID.class);
+            ArgumentCaptor<UUID> aggregateIdCaptor = ArgumentCaptor.forClass(UUID.class);
+            ArgumentCaptor<String> eventTypeCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<OffsetDateTime> occurredAtCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
+            ArgumentCaptor<ProductCreatedEvent> eventCaptor = ArgumentCaptor.forClass(ProductCreatedEvent.class);
+
+            verify(outboxService).saveEvent(
+                    eventIdCaptor.capture(),
+                    aggregateIdCaptor.capture(),
+                    eventTypeCaptor.capture(),
+                    occurredAtCaptor.capture(),
+                    eventCaptor.capture()
+            );
+
+            assertThat(eventIdCaptor.getValue()).isNotNull();
+            assertThat(aggregateIdCaptor.getValue()).isEqualTo(generatedId);
+            assertThat(eventTypeCaptor.getValue()).isEqualTo("ProductCreated");
+            assertThat(occurredAtCaptor.getValue()).isNotNull();
+
+            ProductCreatedEvent capturedEvent = eventCaptor.getValue();
+            assertThat(capturedEvent.eventId()).isEqualTo(eventIdCaptor.getValue());
+            assertThat(capturedEvent.productId()).isEqualTo(generatedId);
+            assertThat(capturedEvent.sku()).isEqualTo("SKU-ABC-123");
+            assertThat(capturedEvent.name()).isEqualTo("Wireless Mouse");
+            assertThat(capturedEvent.description()).isEqualTo("Ergonomic wireless mouse");
+            assertThat(capturedEvent.category()).isEqualTo("Accessories");
+            assertThat(capturedEvent.price()).isEqualByComparingTo("49.99");
+            assertThat(capturedEvent.currency()).isEqualTo("USD");
+            assertThat(capturedEvent.occurredAt()).isEqualTo(occurredAtCaptor.getValue());
+            assertThat(capturedEvent.version()).isEqualTo(1);
+
             assertThat(response).isNotNull();
             assertThat(response.id()).isEqualTo(generatedId);
             assertThat(response.sku()).isEqualTo("SKU-ABC-123");
@@ -125,6 +161,7 @@ class ProductServiceImplTest {
                     .hasMessage("Product with SKU 'SKU-DUP-123' already exists");
 
             verify(productRepository, never()).save(any());
+            verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
         }
     }
 

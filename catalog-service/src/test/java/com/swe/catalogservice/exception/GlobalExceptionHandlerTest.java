@@ -8,6 +8,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BindingResult;
@@ -96,6 +97,25 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().error()).isEqualTo("Bad Request");
         assertThat(response.getBody().message()).contains("sku: must not be blank");
         assertThat(response.getBody().message()).contains("price: must be greater than or equal to 0.00");
+        assertThat(response.getBody().path()).isEqualTo("/api/v1/products");
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("handleDataIntegrityViolation should return 409 Conflict with ApiError")
+    void handleDataIntegrityViolation_ShouldReturn409() {
+        // Arrange
+        DataIntegrityViolationException ex = new DataIntegrityViolationException("duplicate key value violates unique constraint");
+
+        // Act
+        ResponseEntity<ApiError> response = exceptionHandler.handleDataIntegrityViolation(ex, request);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(409);
+        assertThat(response.getBody().error()).isEqualTo("Conflict");
+        assertThat(response.getBody().message()).isEqualTo("Product conflicts with existing data");
         assertThat(response.getBody().path()).isEqualTo("/api/v1/products");
         assertThat(response.getBody().timestamp()).isNotNull();
     }
