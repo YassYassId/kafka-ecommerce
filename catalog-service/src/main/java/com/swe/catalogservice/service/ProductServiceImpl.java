@@ -5,7 +5,10 @@ import com.swe.catalogservice.dto.ProductResponse;
 import com.swe.catalogservice.dto.UpdateProductRequest;
 import com.swe.catalogservice.entity.Product;
 import com.swe.catalogservice.entity.ProductStatus;
+import com.swe.catalogservice.event.PriceChangedEvent;
 import com.swe.catalogservice.event.ProductCreatedEvent;
+import com.swe.catalogservice.event.ProductRetiredEvent;
+import com.swe.catalogservice.event.ProductUpdatedEvent;
 import com.swe.catalogservice.exception.DuplicateSkuException;
 import com.swe.catalogservice.exception.ProductNotFoundException;
 import com.swe.catalogservice.outbox.OutboxService;
@@ -16,7 +19,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -101,11 +106,63 @@ public class ProductServiceImpl implements ProductService {
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ProductNotFoundException(id));
 
-        product.setName(request.name().trim());
-        product.setDescription(request.description());
-        product.setCategory(request.category().trim());
-        product.setPrice(request.price());
-        product.setCurrency(request.currency().trim().toUpperCase());
+        String newName = request.name().trim();
+        String newDescription = request.description();
+        String newCategory = request.category().trim();
+        BigDecimal newPrice = request.price();
+        String newCurrency = request.currency().trim().toUpperCase();
+
+        boolean productDetailsChanged = !Objects.equals(product.getName(), newName)
+                        || !Objects.equals(product.getDescription(), newDescription)
+                        || !Objects.equals(product.getCategory(), newCategory)
+                        || !Objects.equals(product.getCurrency(), newCurrency);
+
+        boolean priceChanged = product.getPrice().compareTo(newPrice) != 0;
+
+        BigDecimal oldPrice = product.getPrice();
+
+        product.setName(newName);
+        product.setDescription(newDescription);
+        product.setCategory(newCategory);
+        product.setPrice(newPrice);
+        product.setCurrency(newCurrency);
+
+        if (productDetailsChanged) {
+            UUID eventId = UUID.randomUUID();
+            OffsetDateTime occurredAt = OffsetDateTime.now();
+
+            ProductUpdatedEvent event = new ProductUpdatedEvent(
+                    eventId,
+                    product.getId(),
+                    product.getSku(),
+                    product.getName(),
+                    product.getDescription(),
+                    product.getCategory(),
+                    product.getCurrency(),
+                    occurredAt,
+                    1
+            );
+
+            outboxService.saveEvent(eventId, product.getId(), "ProductUpdated", occurredAt, event);
+        }
+
+        if (priceChanged) {
+
+            UUID eventId = UUID.randomUUID();
+            OffsetDateTime occurredAt = OffsetDateTime.now();
+
+            PriceChangedEvent event = new PriceChangedEvent(
+                    eventId,
+                    product.getId(),
+                    oldPrice,
+                    newPrice,
+                    product.getCurrency(),
+                    occurredAt,
+                    1
+            );
+
+            outboxService.saveEvent(eventId, product.getId(), "PriceChanged", occurredAt, event);
+        }
 
         return toResponse(product);
     }
@@ -119,6 +176,19 @@ public class ProductServiceImpl implements ProductService {
 
         if (product.getStatus() == ProductStatus.ACTIVE) {
             product.setStatus(ProductStatus.RETIRED);
+
+            UUID eventId = UUID.randomUUID();
+            OffsetDateTime occurredAt = OffsetDateTime.now();
+
+            ProductRetiredEvent event = new ProductRetiredEvent(
+                    eventId,
+                    product.getId(),
+                    product.getSku(),
+                    occurredAt,
+                    1
+            );
+
+            outboxService.saveEvent(eventId, product.getId(), "ProductRetired", occurredAt, event);
         }
 
         return toResponse(product);

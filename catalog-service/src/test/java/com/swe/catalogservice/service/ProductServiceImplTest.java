@@ -5,7 +5,10 @@ import com.swe.catalogservice.dto.ProductResponse;
 import com.swe.catalogservice.dto.UpdateProductRequest;
 import com.swe.catalogservice.entity.Product;
 import com.swe.catalogservice.entity.ProductStatus;
+import com.swe.catalogservice.event.PriceChangedEvent;
 import com.swe.catalogservice.event.ProductCreatedEvent;
+import com.swe.catalogservice.event.ProductRetiredEvent;
+import com.swe.catalogservice.event.ProductUpdatedEvent;
 import com.swe.catalogservice.exception.DuplicateSkuException;
 import com.swe.catalogservice.exception.ProductNotFoundException;
 import com.swe.catalogservice.outbox.OutboxService;
@@ -36,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -314,8 +318,8 @@ class ProductServiceImplTest {
     class UpdateProductTests {
 
         @Test
-        @DisplayName("should update product fields, normalize strings, and return updated response")
-        void shouldUpdateProductSuccessfully() {
+        @DisplayName("should update product fields, normalize strings, and publish both ProductUpdated and PriceChanged events")
+        void shouldUpdateProductSuccessfullyAndPublishEvents() {
             // Arrange
             UUID productId = UUID.randomUUID();
             OffsetDateTime createdAt = OffsetDateTime.now().minusDays(1);
@@ -368,10 +372,190 @@ class ProductServiceImplTest {
             assertThat(response.createdAt()).isEqualTo(createdAt);
 
             verify(productRepository).findById(productId);
+
+            // Outbox events verification
+            ArgumentCaptor<UUID> eventIdCaptor = ArgumentCaptor.forClass(UUID.class);
+            ArgumentCaptor<UUID> aggregateIdCaptor = ArgumentCaptor.forClass(UUID.class);
+            ArgumentCaptor<String> eventTypeCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<OffsetDateTime> occurredAtCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
+            ArgumentCaptor<Object> payloadCaptor = ArgumentCaptor.forClass(Object.class);
+
+            verify(outboxService, times(2)).saveEvent(
+                    eventIdCaptor.capture(),
+                    aggregateIdCaptor.capture(),
+                    eventTypeCaptor.capture(),
+                    occurredAtCaptor.capture(),
+                    payloadCaptor.capture()
+            );
+
+            List<String> eventTypes = eventTypeCaptor.getAllValues();
+            assertThat(eventTypes).containsExactly("ProductUpdated", "PriceChanged");
+
+            List<UUID> aggregateIds = aggregateIdCaptor.getAllValues();
+            assertThat(aggregateIds).containsOnly(productId);
+
+            List<Object> payloads = payloadCaptor.getAllValues();
+
+            ProductUpdatedEvent updatedEvent = (ProductUpdatedEvent) payloads.get(0);
+            assertThat(updatedEvent.eventId()).isEqualTo(eventIdCaptor.getAllValues().get(0));
+            assertThat(updatedEvent.productId()).isEqualTo(productId);
+            assertThat(updatedEvent.sku()).isEqualTo("SKU-ORIGINAL-01");
+            assertThat(updatedEvent.name()).isEqualTo("New Product Name");
+            assertThat(updatedEvent.description()).isEqualTo("Updated Description");
+            assertThat(updatedEvent.category()).isEqualTo("Electronics");
+            assertThat(updatedEvent.currency()).isEqualTo("EUR");
+            assertThat(updatedEvent.occurredAt()).isEqualTo(occurredAtCaptor.getAllValues().get(0));
+            assertThat(updatedEvent.version()).isEqualTo(1);
+
+            PriceChangedEvent priceEvent = (PriceChangedEvent) payloads.get(1);
+            assertThat(priceEvent.eventId()).isEqualTo(eventIdCaptor.getAllValues().get(1));
+            assertThat(priceEvent.productId()).isEqualTo(productId);
+            assertThat(priceEvent.oldPrice()).isEqualByComparingTo("19.99");
+            assertThat(priceEvent.newPrice()).isEqualByComparingTo("49.99");
+            assertThat(priceEvent.currency()).isEqualTo("EUR");
+            assertThat(priceEvent.occurredAt()).isEqualTo(occurredAtCaptor.getAllValues().get(1));
+            assertThat(priceEvent.version()).isEqualTo(1);
         }
 
         @Test
-        @DisplayName("should throw ProductNotFoundException when product to update does not exist")
+        @DisplayName("should publish only ProductUpdatedEvent when details change but price remains the same")
+        void shouldPublishOnlyProductUpdatedEventWhenOnlyDetailsChange() {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            Product existingProduct = Product.builder()
+                    .id(productId)
+                    .sku("SKU-DETAILS-01")
+                    .name("Old Name")
+                    .description("Old Desc")
+                    .category("Old Category")
+                    .price(new BigDecimal("25.00"))
+                    .currency("USD")
+                    .status(ProductStatus.ACTIVE)
+                    .build();
+
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "New Name",
+                    "New Desc",
+                    "New Category",
+                    new BigDecimal("25.00"),
+                    "USD"
+            );
+
+            when(productRepository.findById(productId)).thenReturn(Optional.of(existingProduct));
+
+            // Act
+            ProductResponse response = productService.updateProduct(productId, request);
+
+            // Assert
+            assertThat(response.name()).isEqualTo("New Name");
+            assertThat(response.price()).isEqualByComparingTo("25.00");
+
+            ArgumentCaptor<ProductUpdatedEvent> eventCaptor = ArgumentCaptor.forClass(ProductUpdatedEvent.class);
+            verify(outboxService, times(1)).saveEvent(
+                    any(UUID.class),
+                    eq(productId),
+                    eq("ProductUpdated"),
+                    any(OffsetDateTime.class),
+                    eventCaptor.capture()
+            );
+
+            ProductUpdatedEvent capturedEvent = eventCaptor.getValue();
+            assertThat(capturedEvent.productId()).isEqualTo(productId);
+            assertThat(capturedEvent.sku()).isEqualTo("SKU-DETAILS-01");
+            assertThat(capturedEvent.name()).isEqualTo("New Name");
+            assertThat(capturedEvent.description()).isEqualTo("New Desc");
+            assertThat(capturedEvent.category()).isEqualTo("New Category");
+            assertThat(capturedEvent.currency()).isEqualTo("USD");
+
+            verify(outboxService, never()).saveEvent(any(), any(), eq("PriceChanged"), any(), any());
+        }
+
+        @Test
+        @DisplayName("should publish only PriceChangedEvent when price changes but details remain the same")
+        void shouldPublishOnlyPriceChangedEventWhenOnlyPriceChanges() {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            Product existingProduct = Product.builder()
+                    .id(productId)
+                    .sku("SKU-PRICE-01")
+                    .name("Same Name")
+                    .description("Same Desc")
+                    .category("Same Category")
+                    .price(new BigDecimal("10.00"))
+                    .currency("USD")
+                    .status(ProductStatus.ACTIVE)
+                    .build();
+
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "  Same Name  ",
+                    "Same Desc",
+                    "  Same Category  ",
+                    new BigDecimal("15.50"),
+                    "  usd  "
+            );
+
+            when(productRepository.findById(productId)).thenReturn(Optional.of(existingProduct));
+
+            // Act
+            ProductResponse response = productService.updateProduct(productId, request);
+
+            // Assert
+            assertThat(response.price()).isEqualByComparingTo("15.50");
+
+            ArgumentCaptor<PriceChangedEvent> eventCaptor = ArgumentCaptor.forClass(PriceChangedEvent.class);
+            verify(outboxService, times(1)).saveEvent(
+                    any(UUID.class),
+                    eq(productId),
+                    eq("PriceChanged"),
+                    any(OffsetDateTime.class),
+                    eventCaptor.capture()
+            );
+
+            PriceChangedEvent capturedEvent = eventCaptor.getValue();
+            assertThat(capturedEvent.productId()).isEqualTo(productId);
+            assertThat(capturedEvent.oldPrice()).isEqualByComparingTo("10.00");
+            assertThat(capturedEvent.newPrice()).isEqualByComparingTo("15.50");
+            assertThat(capturedEvent.currency()).isEqualTo("USD");
+
+            verify(outboxService, never()).saveEvent(any(), any(), eq("ProductUpdated"), any(), any());
+        }
+
+        @Test
+        @DisplayName("should not publish any events when no fields change")
+        void shouldNotPublishAnyEventsWhenNoFieldsChange() {
+            // Arrange
+            UUID productId = UUID.randomUUID();
+            Product existingProduct = Product.builder()
+                    .id(productId)
+                    .sku("SKU-NOCHANGE-01")
+                    .name("Exact Name")
+                    .description("Exact Desc")
+                    .category("Exact Category")
+                    .price(new BigDecimal("30.00"))
+                    .currency("USD")
+                    .status(ProductStatus.ACTIVE)
+                    .build();
+
+            UpdateProductRequest request = new UpdateProductRequest(
+                    "  Exact Name  ",
+                    "Exact Desc",
+                    "  Exact Category  ",
+                    new BigDecimal("30.00"),
+                    "  usd  "
+            );
+
+            when(productRepository.findById(productId)).thenReturn(Optional.of(existingProduct));
+
+            // Act
+            ProductResponse response = productService.updateProduct(productId, request);
+
+            // Assert
+            assertThat(response).isNotNull();
+            verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should throw ProductNotFoundException and not publish events when product does not exist")
         void shouldThrowProductNotFoundExceptionWhenProductNotFound() {
             // Arrange
             UUID nonExistentId = UUID.randomUUID();
@@ -391,6 +575,7 @@ class ProductServiceImplTest {
                     .hasMessage("Product with ID: '" + nonExistentId + "' was not found");
 
             verify(productRepository).findById(nonExistentId);
+            verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
         }
     }
 
@@ -399,8 +584,8 @@ class ProductServiceImplTest {
     class RetireProductTests {
 
         @Test
-        @DisplayName("should set product status to RETIRED when active product exists")
-        void shouldRetireActiveProductSuccessfully() {
+        @DisplayName("should set product status to RETIRED and publish ProductRetiredEvent when active product exists")
+        void shouldRetireActiveProductSuccessfullyAndPublishEvent() {
             // Arrange
             UUID productId = UUID.randomUUID();
             OffsetDateTime createdAt = OffsetDateTime.now().minusDays(2);
@@ -433,10 +618,36 @@ class ProductServiceImplTest {
             assertThat(response.name()).isEqualTo("Active Item");
 
             verify(productRepository).findById(productId);
+
+            ArgumentCaptor<UUID> eventIdCaptor = ArgumentCaptor.forClass(UUID.class);
+            ArgumentCaptor<UUID> aggregateIdCaptor = ArgumentCaptor.forClass(UUID.class);
+            ArgumentCaptor<String> eventTypeCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<OffsetDateTime> occurredAtCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
+            ArgumentCaptor<ProductRetiredEvent> eventCaptor = ArgumentCaptor.forClass(ProductRetiredEvent.class);
+
+            verify(outboxService).saveEvent(
+                    eventIdCaptor.capture(),
+                    aggregateIdCaptor.capture(),
+                    eventTypeCaptor.capture(),
+                    occurredAtCaptor.capture(),
+                    eventCaptor.capture()
+            );
+
+            assertThat(eventIdCaptor.getValue()).isNotNull();
+            assertThat(aggregateIdCaptor.getValue()).isEqualTo(productId);
+            assertThat(eventTypeCaptor.getValue()).isEqualTo("ProductRetired");
+            assertThat(occurredAtCaptor.getValue()).isNotNull();
+
+            ProductRetiredEvent capturedEvent = eventCaptor.getValue();
+            assertThat(capturedEvent.eventId()).isEqualTo(eventIdCaptor.getValue());
+            assertThat(capturedEvent.productId()).isEqualTo(productId);
+            assertThat(capturedEvent.sku()).isEqualTo("SKU-RETIRE-01");
+            assertThat(capturedEvent.occurredAt()).isEqualTo(occurredAtCaptor.getValue());
+            assertThat(capturedEvent.version()).isEqualTo(1);
         }
 
         @Test
-        @DisplayName("should remain RETIRED when retiring an already retired product")
+        @DisplayName("should remain RETIRED and not publish event when retiring an already retired product")
         void shouldRemainRetiredWhenAlreadyRetired() {
             // Arrange
             UUID productId = UUID.randomUUID();
@@ -466,10 +677,11 @@ class ProductServiceImplTest {
             assertThat(response.status()).isEqualTo(ProductStatus.RETIRED);
 
             verify(productRepository).findById(productId);
+            verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
         }
 
         @Test
-        @DisplayName("should throw ProductNotFoundException when product to retire does not exist")
+        @DisplayName("should throw ProductNotFoundException and not publish event when product does not exist")
         void shouldThrowProductNotFoundExceptionWhenProductNotFound() {
             // Arrange
             UUID nonExistentId = UUID.randomUUID();
@@ -481,6 +693,7 @@ class ProductServiceImplTest {
                     .hasMessage("Product with ID: '" + nonExistentId + "' was not found");
 
             verify(productRepository).findById(nonExistentId);
+            verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
         }
     }
 }
