@@ -33,6 +33,9 @@ public class InventoryItem {
     @Column(name = "reserved_quantity", nullable = false)
     private int reservedQuantity;
 
+    @Column(name = "product_active", nullable = false)
+    private boolean productActive;
+
     @Column(name = "version", nullable = false)
     @Version
     private long version;
