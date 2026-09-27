@@ -98,4 +98,58 @@ class InventoryItemRepositoryTest {
         assertThatThrownBy(() -> inventoryItemRepository.saveAndFlush(item))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
+
+    @Test
+    @DisplayName("should return true when inventory item exists by product ID and false otherwise")
+    void shouldCheckExistenceByProductId() {
+        UUID existingProductId = UUID.randomUUID();
+        UUID nonExistingProductId = UUID.randomUUID();
+
+        InventoryItem item = InventoryItem.builder()
+                .productId(existingProductId)
+                .availableQuantity(20)
+                .reservedQuantity(0)
+                .productActive(true)
+                .build();
+
+        inventoryItemRepository.saveAndFlush(item);
+        entityManager.clear();
+
+        assertThat(inventoryItemRepository.existsByProductId(existingProductId)).isTrue();
+        assertThat(inventoryItemRepository.existsByProductId(nonExistingProductId)).isFalse();
+    }
+
+    @Test
+    @DisplayName("should persist and retrieve productActive status correctly")
+    void shouldPersistAndRetrieveProductActiveStatus() {
+        UUID productIdActive = UUID.randomUUID();
+        UUID productIdInactive = UUID.randomUUID();
+
+        InventoryItem activeItem = InventoryItem.builder()
+                .productId(productIdActive)
+                .availableQuantity(15)
+                .reservedQuantity(0)
+                .productActive(true)
+                .build();
+
+        InventoryItem inactiveItem = InventoryItem.builder()
+                .productId(productIdInactive)
+                .availableQuantity(0)
+                .reservedQuantity(0)
+                .productActive(false)
+                .build();
+
+        inventoryItemRepository.saveAndFlush(activeItem);
+        inventoryItemRepository.saveAndFlush(inactiveItem);
+        entityManager.clear();
+
+        Optional<InventoryItem> retrievedActive = inventoryItemRepository.findByProductId(productIdActive);
+        Optional<InventoryItem> retrievedInactive = inventoryItemRepository.findByProductId(productIdInactive);
+
+        assertThat(retrievedActive).isPresent();
+        assertThat(retrievedActive.get().isProductActive()).isTrue();
+
+        assertThat(retrievedInactive).isPresent();
+        assertThat(retrievedInactive.get().isProductActive()).isFalse();
+    }
 }
