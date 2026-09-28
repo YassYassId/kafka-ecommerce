@@ -1,5 +1,6 @@
 package com.swe.catalogservice.outbox;
 
+import com.swe.catalogservice.observability.CatalogMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -19,6 +20,7 @@ public class OutboxPublisher {
     private final OutboxService outboxService;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final CatalogTopicResolver topicResolver;
+    private final CatalogMetrics catalogMetrics;
 
     @Scheduled(fixedDelay = 1000)
     public void publishPendingEvents() {
@@ -47,6 +49,8 @@ public class OutboxPublisher {
             kafkaTemplate.send(record).get();
 
             outboxService.markAsPublished(event.getId());
+
+            catalogMetrics.eventPublished(event.getType());
 
             log.info("Published Catalog outbox event eventId={} type={} productId={}", event.getId(), event.getType(),
                     event.getAggregateId());

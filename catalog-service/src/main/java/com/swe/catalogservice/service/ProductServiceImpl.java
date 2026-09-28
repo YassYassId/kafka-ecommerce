@@ -11,9 +11,11 @@ import com.swe.catalogservice.event.ProductRetiredEvent;
 import com.swe.catalogservice.event.ProductUpdatedEvent;
 import com.swe.catalogservice.exception.DuplicateSkuException;
 import com.swe.catalogservice.exception.ProductNotFoundException;
+import com.swe.catalogservice.observability.CatalogMetrics;
 import com.swe.catalogservice.outbox.OutboxService;
 import com.swe.catalogservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -26,10 +28,12 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ProductServiceImpl implements ProductService {
 
     private final ProductRepository productRepository;
     private final OutboxService outboxService;
+    private final CatalogMetrics catalogMetrics;
 
     @Override
     @Transactional
@@ -60,6 +64,9 @@ public class ProductServiceImpl implements ProductService {
                 1);
 
         outboxService.saveEvent(eventId, savedProduct.getId(), "ProductCreated", occurredAt, event);
+
+        catalogMetrics.productCreated();
+        log.info("Product created productId={} sku={}", product.getId(), product.getSku());
 
         return toResponse(savedProduct);
     }
@@ -144,6 +151,9 @@ public class ProductServiceImpl implements ProductService {
             );
 
             outboxService.saveEvent(eventId, product.getId(), "ProductUpdated", occurredAt, event);
+
+            catalogMetrics.productUpdated();
+            log.info("Product updated productId={} sku={}", product.getId(), product.getSku());
         }
 
         if (priceChanged) {
@@ -162,6 +172,9 @@ public class ProductServiceImpl implements ProductService {
             );
 
             outboxService.saveEvent(eventId, product.getId(), "PriceChanged", occurredAt, event);
+
+            catalogMetrics.priceChanged();
+            log.info("Product price changed productId={} sku={}", product.getId(), product.getSku());
         }
 
         return toResponse(product);
@@ -189,6 +202,9 @@ public class ProductServiceImpl implements ProductService {
             );
 
             outboxService.saveEvent(eventId, product.getId(), "ProductRetired", occurredAt, event);
+
+            catalogMetrics.productRetired();
+            log.info("Product retired productId={} sku={}", product.getId(), product.getSku());
         }
 
         return toResponse(product);
