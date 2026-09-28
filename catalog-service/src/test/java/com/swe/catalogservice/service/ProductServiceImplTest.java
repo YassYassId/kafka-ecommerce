@@ -11,6 +11,7 @@ import com.swe.catalogservice.event.ProductRetiredEvent;
 import com.swe.catalogservice.event.ProductUpdatedEvent;
 import com.swe.catalogservice.exception.DuplicateSkuException;
 import com.swe.catalogservice.exception.ProductNotFoundException;
+import com.swe.catalogservice.observability.CatalogMetrics;
 import com.swe.catalogservice.outbox.OutboxService;
 import com.swe.catalogservice.repository.ProductRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -41,6 +42,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,6 +53,9 @@ class ProductServiceImplTest {
 
     @Mock
     private OutboxService outboxService;
+
+    @Mock
+    private CatalogMetrics catalogMetrics;
 
     @InjectMocks
     private ProductServiceImpl productService;
@@ -142,6 +147,8 @@ class ProductServiceImplTest {
             assertThat(response.status()).isEqualTo(ProductStatus.ACTIVE);
             assertThat(response.createdAt()).isEqualTo(now);
             assertThat(response.updatedAt()).isEqualTo(now);
+
+            verify(catalogMetrics).productCreated();
         }
 
         @Test
@@ -166,6 +173,7 @@ class ProductServiceImplTest {
 
             verify(productRepository, never()).save(any());
             verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
+            verifyNoInteractions(catalogMetrics);
         }
     }
 
@@ -212,6 +220,7 @@ class ProductServiceImplTest {
             assertThat(response.updatedAt()).isEqualTo(now);
 
             verify(productRepository).findById(productId);
+            verifyNoInteractions(catalogMetrics);
         }
 
         @Test
@@ -227,6 +236,7 @@ class ProductServiceImplTest {
                     .hasMessage("Product with ID: '" + nonExistentId + "' was not found");
 
             verify(productRepository).findById(nonExistentId);
+            verifyNoInteractions(catalogMetrics);
         }
     }
 
@@ -287,6 +297,7 @@ class ProductServiceImplTest {
             assertThat(response.status()).isEqualTo(ProductStatus.ACTIVE);
 
             verify(productRepository).findAllFiltered("%mouse%", "Peripherals", ProductStatus.ACTIVE, pageable);
+            verifyNoInteractions(catalogMetrics);
         }
 
         @Test
@@ -310,6 +321,7 @@ class ProductServiceImplTest {
             assertThat(result).isNotNull();
             assertThat(result.getContent()).isEmpty();
             verify(productRepository).findAllFiltered(null, null, null, pageable);
+            verifyNoInteractions(catalogMetrics);
         }
     }
 
@@ -415,6 +427,9 @@ class ProductServiceImplTest {
             assertThat(priceEvent.currency()).isEqualTo("EUR");
             assertThat(priceEvent.occurredAt()).isEqualTo(occurredAtCaptor.getAllValues().get(1));
             assertThat(priceEvent.version()).isEqualTo(1);
+
+            verify(catalogMetrics).productUpdated();
+            verify(catalogMetrics).priceChanged();
         }
 
         @Test
@@ -468,6 +483,8 @@ class ProductServiceImplTest {
             assertThat(capturedEvent.currency()).isEqualTo("USD");
 
             verify(outboxService, never()).saveEvent(any(), any(), eq("PriceChanged"), any(), any());
+            verify(catalogMetrics).productUpdated();
+            verify(catalogMetrics, never()).priceChanged();
         }
 
         @Test
@@ -518,6 +535,8 @@ class ProductServiceImplTest {
             assertThat(capturedEvent.currency()).isEqualTo("USD");
 
             verify(outboxService, never()).saveEvent(any(), any(), eq("ProductUpdated"), any(), any());
+            verify(catalogMetrics).priceChanged();
+            verify(catalogMetrics, never()).productUpdated();
         }
 
         @Test
@@ -552,6 +571,7 @@ class ProductServiceImplTest {
             // Assert
             assertThat(response).isNotNull();
             verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
+            verifyNoInteractions(catalogMetrics);
         }
 
         @Test
@@ -576,6 +596,7 @@ class ProductServiceImplTest {
 
             verify(productRepository).findById(nonExistentId);
             verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
+            verifyNoInteractions(catalogMetrics);
         }
     }
 
@@ -644,6 +665,8 @@ class ProductServiceImplTest {
             assertThat(capturedEvent.sku()).isEqualTo("SKU-RETIRE-01");
             assertThat(capturedEvent.occurredAt()).isEqualTo(occurredAtCaptor.getValue());
             assertThat(capturedEvent.version()).isEqualTo(1);
+
+            verify(catalogMetrics).productRetired();
         }
 
         @Test
@@ -678,6 +701,7 @@ class ProductServiceImplTest {
 
             verify(productRepository).findById(productId);
             verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
+            verifyNoInteractions(catalogMetrics);
         }
 
         @Test
@@ -694,6 +718,7 @@ class ProductServiceImplTest {
 
             verify(productRepository).findById(nonExistentId);
             verify(outboxService, never()).saveEvent(any(), any(), any(), any(), any());
+            verifyNoInteractions(catalogMetrics);
         }
     }
 }
