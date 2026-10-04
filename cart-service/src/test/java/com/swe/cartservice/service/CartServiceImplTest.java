@@ -3,6 +3,7 @@ package com.swe.cartservice.service;
 import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
+import com.swe.cartservice.metrics.CartMetrics;
 import com.swe.cartservice.model.Cart;
 import com.swe.cartservice.model.CartItem;
 import com.swe.cartservice.repository.CartRepository;
@@ -27,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -34,6 +36,9 @@ class CartServiceImplTest {
 
     @Mock
     private CartRepository cartRepository;
+
+    @Mock
+    private CartMetrics cartMetrics;
 
     @InjectMocks
     private CartServiceImpl cartService;
@@ -71,6 +76,7 @@ class CartServiceImplTest {
             assertThat(result).isEqualTo(existingCart);
             assertThat(result.items()).hasSize(1);
             verify(cartRepository).findByCustomerId(customerId);
+            verifyNoInteractions(cartMetrics);
         }
 
         @Test
@@ -88,6 +94,7 @@ class CartServiceImplTest {
             assertThat(result.items()).isEmpty();
             assertThat(result.updatedAt()).isNotNull();
             verify(cartRepository).findByCustomerId(customerId);
+            verifyNoInteractions(cartMetrics);
         }
     }
 
@@ -96,7 +103,7 @@ class CartServiceImplTest {
     class AddItemTests {
 
         @Test
-        @DisplayName("should add new item to empty cart and save")
+        @DisplayName("should add new item to empty cart, save and record metric")
         void shouldAddNewItemToEmptyCart() {
             // Arrange
             when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.empty());
@@ -116,10 +123,11 @@ class CartServiceImplTest {
             verify(cartRepository).save(cartCaptor.capture());
             assertThat(cartCaptor.getValue().items()).hasSize(1);
             assertThat(cartCaptor.getValue().items().get(0).productId()).isEqualTo(productId1);
+            verify(cartMetrics).itemAdded();
         }
 
         @Test
-        @DisplayName("should update quantity and price when adding already existing product")
+        @DisplayName("should update quantity and price when adding already existing product and record metric")
         void shouldUpdateQuantityWhenItemAlreadyInCart() {
             // Arrange
             Cart existingCart = new Cart(
@@ -140,10 +148,11 @@ class CartServiceImplTest {
             assertThat(result.items().get(0).price()).isEqualByComparingTo("45.00");
 
             verify(cartRepository).save(any(Cart.class));
+            verify(cartMetrics).itemAdded();
         }
 
         @Test
-        @DisplayName("should append item when adding distinct product to existing non-empty cart")
+        @DisplayName("should append item when adding distinct product to existing non-empty cart and record metric")
         void shouldAppendItemToExistingNonEmptyCart() {
             // Arrange
             Cart existingCart = new Cart(
@@ -161,6 +170,7 @@ class CartServiceImplTest {
             assertThat(result.items()).hasSize(2);
             assertThat(result.items()).extracting(CartItem::productId).containsExactlyInAnyOrder(productId1, productId2);
             verify(cartRepository).save(any(Cart.class));
+            verify(cartMetrics).itemAdded();
         }
     }
 
@@ -169,7 +179,7 @@ class CartServiceImplTest {
     class UpdateItemQuantityTests {
 
         @Test
-        @DisplayName("should update item quantity successfully")
+        @DisplayName("should update item quantity successfully and record metric")
         void shouldUpdateItemQuantity() {
             // Arrange
             Cart existingCart = new Cart(
@@ -195,10 +205,11 @@ class CartServiceImplTest {
             assertThat(updatedItem.price()).isEqualByComparingTo("15.00");
 
             verify(cartRepository).save(any(Cart.class));
+            verify(cartMetrics).itemUpdated();
         }
 
         @Test
-        @DisplayName("should throw CartNotFoundException when cart does not exist")
+        @DisplayName("should throw CartNotFoundException when cart does not exist and not record metric")
         void shouldThrowCartNotFoundExceptionWhenCartNotFound() {
             // Arrange
             when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.empty());
@@ -209,10 +220,11 @@ class CartServiceImplTest {
                     .hasMessageContaining(customerId.toString());
 
             verify(cartRepository, never()).save(any());
+            verifyNoInteractions(cartMetrics);
         }
 
         @Test
-        @DisplayName("should throw CartItemNotFoundException when item is not in cart")
+        @DisplayName("should throw CartItemNotFoundException when item is not in cart and not record metric")
         void shouldThrowCartItemNotFoundExceptionWhenItemNotFound() {
             // Arrange
             Cart existingCart = new Cart(
@@ -228,6 +240,7 @@ class CartServiceImplTest {
                     .hasMessageContaining(productId2.toString());
 
             verify(cartRepository, never()).save(any());
+            verifyNoInteractions(cartMetrics);
         }
     }
 
@@ -236,7 +249,7 @@ class CartServiceImplTest {
     class RemoveItemTests {
 
         @Test
-        @DisplayName("should remove item and save cart when other items remain")
+        @DisplayName("should remove item and save cart when other items remain and record metric")
         void shouldRemoveItemWhenOtherItemsRemain() {
             // Arrange
             Cart existingCart = new Cart(
@@ -257,10 +270,11 @@ class CartServiceImplTest {
             assertThat(result.items().get(0).productId()).isEqualTo(productId2);
             verify(cartRepository).save(any(Cart.class));
             verify(cartRepository, never()).deleteByCustomerId(any());
+            verify(cartMetrics).itemRemoved();
         }
 
         @Test
-        @DisplayName("should delete cart and return empty cart when removing the last remaining item")
+        @DisplayName("should delete cart and return empty cart when removing the last remaining item and record metric")
         void shouldDeleteCartWhenRemovingLastItem() {
             // Arrange
             Cart existingCart = new Cart(
@@ -278,10 +292,11 @@ class CartServiceImplTest {
             assertThat(result.customerId()).isEqualTo(customerId);
             verify(cartRepository).deleteByCustomerId(customerId);
             verify(cartRepository, never()).save(any());
+            verify(cartMetrics).itemRemoved();
         }
 
         @Test
-        @DisplayName("should throw CartNotFoundException when cart does not exist")
+        @DisplayName("should throw CartNotFoundException when cart does not exist and not record metric")
         void shouldThrowCartNotFoundExceptionWhenCartNotFound() {
             // Arrange
             when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.empty());
@@ -291,10 +306,11 @@ class CartServiceImplTest {
                     .isInstanceOf(CartNotFoundException.class);
             verify(cartRepository, never()).deleteByCustomerId(any());
             verify(cartRepository, never()).save(any());
+            verifyNoInteractions(cartMetrics);
         }
 
         @Test
-        @DisplayName("should throw CartItemNotFoundException when item does not exist in cart")
+        @DisplayName("should throw CartItemNotFoundException when item does not exist in cart and not record metric")
         void shouldThrowCartItemNotFoundExceptionWhenItemNotInCart() {
             // Arrange
             Cart existingCart = new Cart(
@@ -309,6 +325,7 @@ class CartServiceImplTest {
                     .isInstanceOf(CartItemNotFoundException.class);
             verify(cartRepository, never()).deleteByCustomerId(any());
             verify(cartRepository, never()).save(any());
+            verifyNoInteractions(cartMetrics);
         }
     }
 
@@ -317,13 +334,14 @@ class CartServiceImplTest {
     class ClearCartTests {
 
         @Test
-        @DisplayName("should delete cart from repository by customer ID")
+        @DisplayName("should delete cart from repository by customer ID and record metric")
         void shouldDeleteCartFromRepository() {
             // Act
             cartService.clearCart(customerId);
 
             // Assert
             verify(cartRepository).deleteByCustomerId(customerId);
+            verify(cartMetrics).cartCleared();
         }
     }
 }
