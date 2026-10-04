@@ -23,3 +23,9 @@ management:
       show-details: always
       probes:
         enabled: true
+    prometheus:
+      access: unrestricted
+
+  health:
+    redis:
+      enabled: true

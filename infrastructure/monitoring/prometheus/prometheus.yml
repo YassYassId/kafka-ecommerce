@@ -26,3 +26,9 @@ scrape_configs:
     static_configs:
       - targets:
           - "host.docker.internal:8084"
+
+  - job_name: "cart-service"
+    metrics_path: "/actuator/prometheus"
+    static_configs:
+      - targets:
+          - "host.docker.internal:8085"
