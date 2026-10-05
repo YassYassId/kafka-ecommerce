@@ -144,4 +144,60 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message()).isEqualTo("An unexpected error occurred");
         assertThat(response.getBody().timestamp()).isNotNull();
     }
+
+    @Test
+    @DisplayName("handleProductNotFound should return 404 NOT_FOUND with ErrorResponse")
+    void handleProductNotFound_ShouldReturn404() {
+        // Arrange
+        UUID productId = UUID.randomUUID();
+        ProductNotFoundException ex = new ProductNotFoundException(productId);
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleProductNotFound(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(404);
+        assertThat(response.getBody().error()).isEqualTo("Not Found");
+        assertThat(response.getBody().message()).isEqualTo("Product not found: " + productId);
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("handleProductNotAvailable should return 409 CONFLICT with ErrorResponse")
+    void handleProductNotAvailable_ShouldReturn409() {
+        // Arrange
+        UUID productId = UUID.randomUUID();
+        ProductNotAvailableException ex = new ProductNotAvailableException(productId);
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleProductNotAvailable(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(409);
+        assertThat(response.getBody().error()).isEqualTo("Conflict");
+        assertThat(response.getBody().message()).isEqualTo("Product is not available: " + productId);
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("handleCatalogUnavailable should return 503 SERVICE_UNAVAILABLE with ErrorResponse")
+    void handleCatalogUnavailable_ShouldReturn503() {
+        // Arrange
+        CatalogUnavailableException ex = new CatalogUnavailableException();
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleCatalogUnavailable(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(503);
+        assertThat(response.getBody().error()).isEqualTo("Service Unavailable");
+        assertThat(response.getBody().message()).isEqualTo("Catalog service is temporarily unavailable");
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
 }

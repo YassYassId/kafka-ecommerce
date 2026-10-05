@@ -4,7 +4,10 @@ import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.dto.UpdateCartItemRequest;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
+import com.swe.cartservice.exception.CatalogUnavailableException;
 import com.swe.cartservice.exception.GlobalExceptionHandler;
+import com.swe.cartservice.exception.ProductNotAvailableException;
+import com.swe.cartservice.exception.ProductNotFoundException;
 import com.swe.cartservice.model.Cart;
 import com.swe.cartservice.model.CartItem;
 import com.swe.cartservice.service.CartService;
@@ -94,7 +97,7 @@ class CartControllerTest {
             // Arrange
             UUID customerId = UUID.randomUUID();
             UUID productId = UUID.randomUUID();
-            AddCartItemRequest request = new AddCartItemRequest(productId, 3, new BigDecimal("19.99"));
+            AddCartItemRequest request = new AddCartItemRequest(productId, 3);
             Cart updatedCart = new Cart(
                     customerId,
                     List.of(new CartItem(productId, 3, new BigDecimal("19.99"))),
@@ -123,8 +126,7 @@ class CartControllerTest {
             String invalidJson = """
                     {
                         "productId": null,
-                        "quantity": 2,
-                        "price": 19.99
+                        "quantity": 2
                     }
                     """;
 
@@ -143,7 +145,7 @@ class CartControllerTest {
         void shouldReturn400WhenQuantityNotPositive() throws Exception {
             // Arrange
             UUID customerId = UUID.randomUUID();
-            AddCartItemRequest request = new AddCartItemRequest(UUID.randomUUID(), 0, new BigDecimal("19.99"));
+            AddCartItemRequest request = new AddCartItemRequest(UUID.randomUUID(), 0);
 
             // Act & Assert
             mockMvc.perform(post(BASE_URL + "/{customerId}/items", customerId)
@@ -151,23 +153,6 @@ class CartControllerTest {
                             .content(objectMapper.writeValueAsString(request)))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errors.quantity").exists());
-
-            verifyNoInteractions(cartService);
-        }
-
-        @Test
-        @DisplayName("should return 400 Bad Request when price is zero or negative")
-        void shouldReturn400WhenPriceZeroOrNegative() throws Exception {
-            // Arrange
-            UUID customerId = UUID.randomUUID();
-            AddCartItemRequest request = new AddCartItemRequest(UUID.randomUUID(), 1, new BigDecimal("0.00"));
-
-            // Act & Assert
-            mockMvc.perform(post(BASE_URL + "/{customerId}/items", customerId)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(objectMapper.writeValueAsString(request)))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.errors.price").exists());
 
             verifyNoInteractions(cartService);
         }
@@ -186,6 +171,66 @@ class CartControllerTest {
                     .andExpect(jsonPath("$.message").value("Malformed JSON request"));
 
             verifyNoInteractions(cartService);
+        }
+
+        @Test
+        @DisplayName("should return 404 Not Found when product is not found in catalog")
+        void shouldReturn404WhenProductNotFoundInCatalog() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            AddCartItemRequest request = new AddCartItemRequest(productId, 2);
+            when(cartService.addItem(eq(customerId), any(AddCartItemRequest.class)))
+                    .thenThrow(new ProductNotFoundException(productId));
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/items", customerId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.status").value(404))
+                    .andExpect(jsonPath("$.error").value("Not Found"))
+                    .andExpect(jsonPath("$.message").value("Product not found: " + productId));
+        }
+
+        @Test
+        @DisplayName("should return 409 Conflict when product is not active")
+        void shouldReturn409WhenProductNotAvailable() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            AddCartItemRequest request = new AddCartItemRequest(productId, 2);
+            when(cartService.addItem(eq(customerId), any(AddCartItemRequest.class)))
+                    .thenThrow(new ProductNotAvailableException(productId));
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/items", customerId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Product is not available: " + productId));
+        }
+
+        @Test
+        @DisplayName("should return 503 Service Unavailable when catalog service is unavailable")
+        void shouldReturn503WhenCatalogUnavailable() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            AddCartItemRequest request = new AddCartItemRequest(productId, 2);
+            when(cartService.addItem(eq(customerId), any(AddCartItemRequest.class)))
+                    .thenThrow(new CatalogUnavailableException());
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/items", customerId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.status").value(503))
+                    .andExpect(jsonPath("$.error").value("Service Unavailable"))
+                    .andExpect(jsonPath("$.message").value("Catalog service is temporarily unavailable"));
         }
     }
 

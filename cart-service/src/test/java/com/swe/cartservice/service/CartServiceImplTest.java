@@ -1,8 +1,14 @@
 package com.swe.cartservice.service;
 
+import com.swe.cartservice.catalog.CatalogClient;
 import com.swe.cartservice.dto.AddCartItemRequest;
+import com.swe.cartservice.dto.CatalogProductResponse;
+import com.swe.cartservice.dto.ProductStatus;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
+import com.swe.cartservice.exception.CatalogUnavailableException;
+import com.swe.cartservice.exception.ProductNotAvailableException;
+import com.swe.cartservice.exception.ProductNotFoundException;
 import com.swe.cartservice.metrics.CartMetrics;
 import com.swe.cartservice.model.Cart;
 import com.swe.cartservice.model.CartItem;
@@ -39,6 +45,9 @@ class CartServiceImplTest {
 
     @Mock
     private CartMetrics cartMetrics;
+
+    @Mock
+    private CatalogClient catalogClient;
 
     @InjectMocks
     private CartServiceImpl cartService;
@@ -106,8 +115,12 @@ class CartServiceImplTest {
         @DisplayName("should add new item to empty cart, save and record metric")
         void shouldAddNewItemToEmptyCart() {
             // Arrange
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId1, new BigDecimal("49.99"), "USD", ProductStatus.ACTIVE
+            );
+            when(catalogClient.getProduct(productId1)).thenReturn(product);
             when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.empty());
-            AddCartItemRequest request = new AddCartItemRequest(productId1, 3, new BigDecimal("49.99"));
+            AddCartItemRequest request = new AddCartItemRequest(productId1, 3);
 
             // Act
             Cart result = cartService.addItem(customerId, request);
@@ -130,13 +143,17 @@ class CartServiceImplTest {
         @DisplayName("should update quantity and price when adding already existing product and record metric")
         void shouldUpdateQuantityWhenItemAlreadyInCart() {
             // Arrange
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId1, new BigDecimal("45.00"), "USD", ProductStatus.ACTIVE
+            );
+            when(catalogClient.getProduct(productId1)).thenReturn(product);
             Cart existingCart = new Cart(
                     customerId,
                     List.of(new CartItem(productId1, 2, new BigDecimal("40.00"))),
                     OffsetDateTime.now().minusHours(1)
             );
             when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
-            AddCartItemRequest request = new AddCartItemRequest(productId1, 3, new BigDecimal("45.00"));
+            AddCartItemRequest request = new AddCartItemRequest(productId1, 3);
 
             // Act
             Cart result = cartService.addItem(customerId, request);
@@ -155,13 +172,17 @@ class CartServiceImplTest {
         @DisplayName("should append item when adding distinct product to existing non-empty cart and record metric")
         void shouldAppendItemToExistingNonEmptyCart() {
             // Arrange
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId2, new BigDecimal("25.00"), "USD", ProductStatus.ACTIVE
+            );
+            when(catalogClient.getProduct(productId2)).thenReturn(product);
             Cart existingCart = new Cart(
                     customerId,
                     List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
                     OffsetDateTime.now()
             );
             when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
-            AddCartItemRequest request = new AddCartItemRequest(productId2, 4, new BigDecimal("25.00"));
+            AddCartItemRequest request = new AddCartItemRequest(productId2, 4);
 
             // Act
             Cart result = cartService.addItem(customerId, request);
@@ -171,6 +192,58 @@ class CartServiceImplTest {
             assertThat(result.items()).extracting(CartItem::productId).containsExactlyInAnyOrder(productId1, productId2);
             verify(cartRepository).save(any(Cart.class));
             verify(cartMetrics).itemAdded();
+        }
+
+        @Test
+        @DisplayName("should throw ProductNotAvailableException when product status is not ACTIVE")
+        void shouldThrowProductNotAvailableExceptionWhenNotActive() {
+            // Arrange
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId1, new BigDecimal("49.99"), "USD", ProductStatus.RETIRED
+            );
+            when(catalogClient.getProduct(productId1)).thenReturn(product);
+            AddCartItemRequest request = new AddCartItemRequest(productId1, 2);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.addItem(customerId, request))
+                    .isInstanceOf(ProductNotAvailableException.class)
+                    .hasMessageContaining(productId1.toString());
+
+            verify(cartRepository, never()).save(any());
+            verifyNoInteractions(cartMetrics);
+        }
+
+        @Test
+        @DisplayName("should propagate ProductNotFoundException when catalog returns not found")
+        void shouldPropagateProductNotFoundException() {
+            // Arrange
+            when(catalogClient.getProduct(productId1))
+                    .thenThrow(new ProductNotFoundException(productId1));
+            AddCartItemRequest request = new AddCartItemRequest(productId1, 1);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.addItem(customerId, request))
+                    .isInstanceOf(ProductNotFoundException.class)
+                    .hasMessageContaining(productId1.toString());
+
+            verify(cartRepository, never()).save(any());
+            verifyNoInteractions(cartMetrics);
+        }
+
+        @Test
+        @DisplayName("should propagate CatalogUnavailableException when catalog service fails")
+        void shouldPropagateCatalogUnavailableException() {
+            // Arrange
+            when(catalogClient.getProduct(productId1))
+                    .thenThrow(new CatalogUnavailableException());
+            AddCartItemRequest request = new AddCartItemRequest(productId1, 1);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.addItem(customerId, request))
+                    .isInstanceOf(CatalogUnavailableException.class);
+
+            verify(cartRepository, never()).save(any());
+            verifyNoInteractions(cartMetrics);
         }
     }
 
