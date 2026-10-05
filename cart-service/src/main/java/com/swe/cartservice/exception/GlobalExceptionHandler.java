@@ -117,4 +117,28 @@ public class GlobalExceptionHandler {
                         "Malformed JSON request"
                 ));
     }
+
+    @ExceptionHandler(ProductNotFoundException.class)
+    public ResponseEntity<ErrorResponse> handleProductNotFound(ProductNotFoundException ex) {
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(new ErrorResponse(OffsetDateTime.now(), HttpStatus.NOT_FOUND.value(),
+                        HttpStatus.NOT_FOUND.getReasonPhrase(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(ProductNotAvailableException.class)
+    public ResponseEntity<ErrorResponse> handleProductNotAvailable(ProductNotAvailableException ex) {
+
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse(OffsetDateTime.now(), HttpStatus.CONFLICT.value(),
+                        HttpStatus.CONFLICT.getReasonPhrase(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(CatalogUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleCatalogUnavailable(CatalogUnavailableException ex) {
+
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(new ErrorResponse(OffsetDateTime.now(), HttpStatus.SERVICE_UNAVAILABLE.value(),
+                        HttpStatus.SERVICE_UNAVAILABLE.getReasonPhrase(), ex.getMessage()));
+    }
 }

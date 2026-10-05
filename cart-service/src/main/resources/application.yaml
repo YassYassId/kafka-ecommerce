@@ -29,3 +29,7 @@ management:
   health:
     redis:
       enabled: true
+
+services:
+  catalog:
+    base-url: http://localhost:8084

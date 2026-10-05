@@ -1,8 +1,12 @@
 package com.swe.cartservice.service;
 
+import com.swe.cartservice.catalog.CatalogClient;
 import com.swe.cartservice.dto.AddCartItemRequest;
+import com.swe.cartservice.dto.CatalogProductResponse;
+import com.swe.cartservice.dto.ProductStatus;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
+import com.swe.cartservice.exception.ProductNotAvailableException;
 import com.swe.cartservice.metrics.CartMetrics;
 import com.swe.cartservice.model.Cart;
 import com.swe.cartservice.model.CartItem;
@@ -22,6 +26,7 @@ public class CartServiceImpl implements CartService {
 
     private final CartRepository cartRepository;
     private final CartMetrics cartMetrics;
+    private final CatalogClient catalogClient;
 
     @Override
     public Cart getCart(UUID customerId) {
@@ -31,29 +36,33 @@ public class CartServiceImpl implements CartService {
 
     @Override
     public Cart addItem(UUID customerId, AddCartItemRequest request) {
-        List<CartItem> items = new ArrayList<>(
-                cartRepository.findByCustomerId(customerId)
-                        .map(Cart::items)
-                        .orElseGet(List::of)
-        );
 
-        Optional<CartItem> existingItem = items.stream()
+        CatalogProductResponse product =
+                catalogClient.getProduct(request.productId());
+
+        if (product.status() != ProductStatus.ACTIVE) {
+            throw new ProductNotAvailableException(request.productId());
+        }
+
+        Cart existingCart = getCart(customerId);
+
+        var items = new ArrayList<>(existingCart.items());
+
+        var existingItem = items.stream()
                 .filter(item -> item.productId().equals(request.productId()))
                 .findFirst();
 
         if (existingItem.isPresent()) {
-            int index = items.indexOf(existingItem.get());
-            items.set(index, new CartItem(
-                    request.productId(),
-                    existingItem.get().quantity() + request.quantity(),
-                    request.price()
-            ));
+
+            CartItem current = existingItem.get();
+
+            items.remove(current);
+
+            items.add(new CartItem(current.productId(), current.quantity() + request.quantity(), product.price()));
+
         } else {
-            items.add(new CartItem(
-                    request.productId(),
-                    request.quantity(),
-                    request.price()
-            ));
+
+            items.add(new CartItem(request.productId(), request.quantity(), product.price()));
         }
 
         Cart updatedCart = new Cart(customerId, List.copyOf(items), OffsetDateTime.now());
