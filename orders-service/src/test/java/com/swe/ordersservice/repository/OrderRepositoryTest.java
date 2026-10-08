@@ -155,4 +155,44 @@ class OrderRepositoryTest {
         assertThatThrownBy(() -> orderRepository.saveAndFlush(order))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
+
+    @Test
+    @DisplayName("should save and retrieve order by idempotency key")
+    void shouldSaveAndRetrieveOrderByIdempotencyKey() {
+        String idempotencyKey = UUID.randomUUID().toString();
+        Order order = Order.builder()
+                .customerId(UUID.randomUUID())
+                .status(OrderStatus.PENDING)
+                .idempotencyKey(idempotencyKey)
+                .build();
+
+        orderRepository.saveAndFlush(order);
+        entityManager.clear();
+
+        var retrieved = orderRepository.findByIdempotencyKey(idempotencyKey);
+        assertThat(retrieved).isPresent();
+        assertThat(retrieved.get().getIdempotencyKey()).isEqualTo(idempotencyKey);
+    }
+
+    @Test
+    @DisplayName("should fail when duplicate idempotency key is inserted due to unique constraint")
+    void shouldFailWhenDuplicateIdempotencyKeyIsInserted() {
+        String idempotencyKey = UUID.randomUUID().toString();
+
+        Order order1 = Order.builder()
+                .customerId(UUID.randomUUID())
+                .status(OrderStatus.PENDING)
+                .idempotencyKey(idempotencyKey)
+                .build();
+        orderRepository.saveAndFlush(order1);
+
+        Order order2 = Order.builder()
+                .customerId(UUID.randomUUID())
+                .status(OrderStatus.PENDING)
+                .idempotencyKey(idempotencyKey)
+                .build();
+
+        assertThatThrownBy(() -> orderRepository.saveAndFlush(order2))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
 }

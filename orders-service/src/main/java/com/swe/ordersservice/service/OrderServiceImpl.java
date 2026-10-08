@@ -11,6 +11,7 @@ import com.swe.ordersservice.event.InventoryRejectedEvent;
 import com.swe.ordersservice.event.InventoryReservedEvent;
 import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.event.OrderCreatedItem;
+import com.swe.ordersservice.exception.InvalidIdempotencyKeyException;
 import com.swe.ordersservice.exception.OrderNotFoundException;
 import com.swe.ordersservice.metrics.AfterCommitExecutor;
 import com.swe.ordersservice.metrics.OrderMetrics;
@@ -27,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -44,12 +46,27 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
-    public OrderResponse createOrder(OrderRequest request) {
+    public OrderResponse createOrder(String idempotencyKey, OrderRequest request) {
+
+        // Check Idempotency
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new InvalidIdempotencyKeyException();
+        }
+
+        Optional<Order> existingOrder =
+                orderRepository.findByIdempotencyKey(idempotencyKey);
+
+        if (existingOrder.isPresent()) {
+            Order order = existingOrder.get();
+
+            return new OrderResponse(order.getId(), order.getStatus());
+        }
 
         // 1. Create the Order
         Order order = Order.builder()
                 .customerId(request.customerId())
                 .status(OrderStatus.PENDING)
+                .idempotencyKey(idempotencyKey)
                 .build();
 
         // 2. Create OrderItems and associate them with the Order

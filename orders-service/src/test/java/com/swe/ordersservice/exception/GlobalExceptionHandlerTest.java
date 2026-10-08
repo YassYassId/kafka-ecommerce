@@ -138,4 +138,43 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().error()).isEqualTo("Internal Server Error");
         assertThat(response.getBody().message()).isEqualTo("An unexpected internal error occurred. Please try again later.");
     }
+
+    @Test
+    @DisplayName("handleInvalidIdempotencyKey should return 400 Bad Request")
+    void handleInvalidIdempotencyKey_ShouldReturn400() {
+        // Arrange
+        InvalidIdempotencyKeyException ex = new InvalidIdempotencyKeyException();
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleInvalidIdempotencyKey(ex, request);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(400);
+        assertThat(response.getBody().error()).isEqualTo("Bad Request");
+        assertThat(response.getBody().message()).isEqualTo("Idempotency-Key must not be blank");
+        assertThat(response.getBody().path()).isEqualTo("/api/v1/orders");
+    }
+
+    @Test
+    @DisplayName("handleMissingRequestHeader should return 400 Bad Request with header name")
+    void handleMissingRequestHeader_ShouldReturn400() throws NoSuchMethodException {
+        // Arrange
+        var method = GlobalExceptionHandlerTest.class.getDeclaredMethod("setUp");
+        var methodParam = new org.springframework.core.MethodParameter(method, -1);
+        org.springframework.web.bind.MissingRequestHeaderException ex =
+                new org.springframework.web.bind.MissingRequestHeaderException("Idempotency-Key", methodParam);
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleMissingRequestHeader(ex, request);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(400);
+        assertThat(response.getBody().error()).isEqualTo("Bad Request");
+        assertThat(response.getBody().message()).isEqualTo("Missing required header: Idempotency-Key");
+        assertThat(response.getBody().path()).isEqualTo("/api/v1/orders");
+    }
 }

@@ -9,7 +9,7 @@ import java.util.UUID;
 
 public interface OrderService {
 
-    OrderResponse createOrder(OrderRequest orderRequest);
+    OrderResponse createOrder(String idempotencyKey, OrderRequest orderRequest);
 
     OrderResponse getOrder(UUID orderId);
 

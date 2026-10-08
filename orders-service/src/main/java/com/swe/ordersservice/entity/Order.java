@@ -46,6 +46,9 @@ public class Order {
     @Builder.Default
     private List<OrderItem> items = new ArrayList<>();
 
+    @Column(name = "idempotency_key", unique = true)
+    private String idempotencyKey;
+
     // Domain helper methods to maintain bidirectional integrity
     public void addItem(OrderItem item) {
         items.add(item);

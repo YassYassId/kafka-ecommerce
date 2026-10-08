@@ -8,10 +8,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 @Slf4j
@@ -96,6 +98,32 @@ public class GlobalExceptionHandler {
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 HttpStatus.INTERNAL_SERVER_ERROR.getReasonPhrase(),
                 "An unexpected internal error occurred. Please try again later.",
+                request.getRequestURI()
+        ));
+    }
+
+    @ExceptionHandler(InvalidIdempotencyKeyException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidIdempotencyKey(
+            InvalidIdempotencyKeyException ex,
+            HttpServletRequest request) {
+
+        log.warn("Invalid idempotency key on path {}", request.getRequestURI());
+
+        return ResponseEntity.badRequest().body(new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                HttpStatus.BAD_REQUEST.getReasonPhrase(),
+                ex.getMessage(),
+                request.getRequestURI()
+        ));
+    }
+
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ErrorResponse> handleMissingRequestHeader(MissingRequestHeaderException ex, HttpServletRequest request) {
+
+        return ResponseEntity.badRequest().body(new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                HttpStatus.BAD_REQUEST.getReasonPhrase(),
+                "Missing required header: " + ex.getHeaderName(),
                 request.getRequestURI()
         ));
     }

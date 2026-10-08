@@ -6,6 +6,7 @@ import com.swe.ordersservice.dto.OrderRequest;
 import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.OrderStatus;
 import com.swe.ordersservice.exception.GlobalExceptionHandler;
+import com.swe.ordersservice.exception.InvalidIdempotencyKeyException;
 import com.swe.ordersservice.exception.OrderNotFoundException;
 import com.swe.ordersservice.service.OrderService;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +24,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -50,8 +53,37 @@ class OrderControllerTest {
     class CreateOrderApiTests {
 
         @Test
-        @DisplayName("should return 201 Created and order response when request is valid")
-        void createOrder_WhenValidRequest_ShouldReturn201Created() throws Exception {
+        @DisplayName("should return 201 Created and order response when request is valid with Idempotency-Key")
+        void createOrder_WhenValidRequestWithIdempotencyKey_ShouldReturn201Created() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            UUID generatedOrderId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(productId, 3))
+            );
+
+            OrderResponse mockResponse = new OrderResponse(generatedOrderId, OrderStatus.PENDING);
+            when(orderService.createOrder(eq(idempotencyKey), any(OrderRequest.class))).thenReturn(mockResponse);
+
+            // Act & Assert
+            mockMvc.perform(post(ORDERS_URL)
+                            .header("Idempotency-Key", idempotencyKey)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.orderId").value(generatedOrderId.toString()))
+                    .andExpect(jsonPath("$.status").value("PENDING"));
+
+            verify(orderService).createOrder(eq(idempotencyKey), any(OrderRequest.class));
+        }
+
+        @Test
+        @DisplayName("should pass null idempotencyKey to service when header is omitted")
+        void createOrder_WhenIdempotencyKeyOmitted_ShouldPassNullToService() throws Exception {
             // Arrange
             UUID customerId = UUID.randomUUID();
             UUID productId = UUID.randomUUID();
@@ -63,7 +95,7 @@ class OrderControllerTest {
             );
 
             OrderResponse mockResponse = new OrderResponse(generatedOrderId, OrderStatus.PENDING);
-            when(orderService.createOrder(any(OrderRequest.class))).thenReturn(mockResponse);
+            when(orderService.createOrder(isNull(), any(OrderRequest.class))).thenReturn(mockResponse);
 
             // Act & Assert
             mockMvc.perform(post(ORDERS_URL)
@@ -72,6 +104,34 @@ class OrderControllerTest {
                     .andExpect(status().isCreated())
                     .andExpect(jsonPath("$.orderId").value(generatedOrderId.toString()))
                     .andExpect(jsonPath("$.status").value("PENDING"));
+
+            verify(orderService).createOrder(isNull(), any(OrderRequest.class));
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when service throws InvalidIdempotencyKeyException")
+        void createOrder_WhenInvalidIdempotencyKey_ShouldReturn400BadRequest() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(productId, 3))
+            );
+
+            when(orderService.createOrder(any(), any(OrderRequest.class)))
+                    .thenThrow(new InvalidIdempotencyKeyException());
+
+            // Act & Assert
+            mockMvc.perform(post(ORDERS_URL)
+                            .header("Idempotency-Key", "")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value("Idempotency-Key must not be blank"));
         }
 
         @Test
