@@ -1,6 +1,7 @@
 package com.swe.cartservice.service;
 
 import com.swe.cartservice.dto.AddCartItemRequest;
+import com.swe.cartservice.dto.CheckoutResponse;
 import com.swe.cartservice.model.Cart;
 
 import java.util.UUID;
@@ -16,4 +17,6 @@ public interface CartService {
     Cart removeItem(UUID customerId, UUID productId);
 
     void clearCart(UUID customerId);
+
+    CheckoutResponse checkout(UUID customerId, String idempotencyKey);
 }

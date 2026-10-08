@@ -33,3 +33,6 @@ management:
 services:
   catalog:
     base-url: http://localhost:8084
+
+  orders:
+    base-url: http://localhost:8081

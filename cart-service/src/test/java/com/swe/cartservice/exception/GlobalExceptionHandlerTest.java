@@ -200,4 +200,62 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message()).isEqualTo("Catalog service is temporarily unavailable");
         assertThat(response.getBody().timestamp()).isNotNull();
     }
+
+    @Test
+    @DisplayName("handleEmptyCart should return 409 CONFLICT with ErrorResponse")
+    void handleEmptyCart_ShouldReturn409() {
+        // Arrange
+        UUID customerId = UUID.randomUUID();
+        EmptyCartException ex = new EmptyCartException(customerId);
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleEmptyCart(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(409);
+        assertThat(response.getBody().error()).isEqualTo("Conflict");
+        assertThat(response.getBody().message()).isEqualTo("Cannot checkout an empty cart for customer: " + customerId);
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("handleOrderServiceUnavailable should return 503 SERVICE_UNAVAILABLE with ErrorResponse")
+    void handleOrderServiceUnavailable_ShouldReturn503() {
+        // Arrange
+        OrderServiceUnavailableException ex = new OrderServiceUnavailableException();
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleOrderServiceUnavailable(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(503);
+        assertThat(response.getBody().error()).isEqualTo("Service Unavailable");
+        assertThat(response.getBody().message()).isEqualTo("Orders service is temporarily unavailable");
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("handleMissingRequestHeader should return 400 BAD_REQUEST with ErrorResponse")
+    void handleMissingRequestHeader_ShouldReturn400() throws NoSuchMethodException {
+        // Arrange
+        var method = GlobalExceptionHandlerTest.class.getDeclaredMethod("setUp");
+        var methodParam = new org.springframework.core.MethodParameter(method, -1);
+        org.springframework.web.bind.MissingRequestHeaderException ex =
+                new org.springframework.web.bind.MissingRequestHeaderException("Idempotency-Key", methodParam);
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleMissingRequestHeader(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(400);
+        assertThat(response.getBody().error()).isEqualTo("Bad Request");
+        assertThat(response.getBody().message()).isEqualTo("Missing required header: Idempotency-Key");
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
 }

@@ -1,11 +1,17 @@
 package com.swe.cartservice.service;
 
-import com.swe.cartservice.catalog.CatalogClient;
+import com.swe.cartservice.client.catalog.CatalogClient;
+import com.swe.cartservice.client.order.CreateOrderItemRequest;
+import com.swe.cartservice.client.order.CreateOrderRequest;
+import com.swe.cartservice.client.order.OrderClient;
+import com.swe.cartservice.client.order.OrderResponse;
 import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.dto.CatalogProductResponse;
+import com.swe.cartservice.dto.CheckoutResponse;
 import com.swe.cartservice.dto.ProductStatus;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
+import com.swe.cartservice.exception.EmptyCartException;
 import com.swe.cartservice.exception.ProductNotAvailableException;
 import com.swe.cartservice.metrics.CartMetrics;
 import com.swe.cartservice.model.Cart;
@@ -27,6 +33,7 @@ public class CartServiceImpl implements CartService {
     private final CartRepository cartRepository;
     private final CartMetrics cartMetrics;
     private final CatalogClient catalogClient;
+    private final OrderClient orderClient;
 
     @Override
     public Cart getCart(UUID customerId) {
@@ -134,6 +141,49 @@ public class CartServiceImpl implements CartService {
     public void clearCart(UUID customerId) {
         cartRepository.deleteByCustomerId(customerId);
         cartMetrics.cartCleared();
+    }
+
+    @Override
+    public CheckoutResponse checkout(UUID customerId, String idempotencyKey) {
+
+        Cart cart = cartRepository.findByCustomerId(customerId)
+                .orElseThrow(() -> new CartNotFoundException(customerId));
+
+        if (cart.items().isEmpty()) {
+            throw new EmptyCartException(customerId);
+        }
+
+        List<CreateOrderItemRequest> orderItems = new ArrayList<>();
+
+        for (CartItem item : cart.items()) {
+
+            CatalogProductResponse product = catalogClient.getProduct(item.productId());
+
+            if (product.status() != ProductStatus.ACTIVE) {
+                throw new ProductNotAvailableException(item.productId());
+            }
+
+            /*
+             * product.price() is authoritative here.
+             *
+             * The current Orders model does not yet persist prices,
+             * so there is nothing to send yet.
+             *
+             * This validation still ensures the cart is checked
+             * against current Catalog state immediately before order
+             * creation.
+             */
+
+            orderItems.add(new CreateOrderItemRequest(item.productId(), item.quantity()));
+        }
+
+        CreateOrderRequest orderRequest = new CreateOrderRequest(customerId, List.copyOf(orderItems));
+
+        OrderResponse order = orderClient.createOrder(idempotencyKey, orderRequest);
+
+        cartRepository.deleteByCustomerId(customerId);
+
+        return new CheckoutResponse(order.orderId(), order.status());
     }
 
     private Cart emptyCart(UUID customerId) {

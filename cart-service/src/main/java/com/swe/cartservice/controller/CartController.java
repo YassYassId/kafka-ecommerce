@@ -1,6 +1,7 @@
 package com.swe.cartservice.controller;
 
 import com.swe.cartservice.dto.AddCartItemRequest;
+import com.swe.cartservice.dto.CheckoutResponse;
 import com.swe.cartservice.dto.UpdateCartItemRequest;
 import com.swe.cartservice.model.Cart;
 import com.swe.cartservice.service.CartService;
@@ -51,5 +52,13 @@ public class CartController {
         cartService.clearCart(customerId);
 
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{customerId}/checkout")
+    public ResponseEntity<CheckoutResponse> checkout(
+            @PathVariable UUID customerId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey) {
+
+        return ResponseEntity.ok(cartService.checkout(customerId, idempotencyKey));
     }
 }

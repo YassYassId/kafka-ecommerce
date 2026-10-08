@@ -1,12 +1,19 @@
 package com.swe.cartservice.service;
 
-import com.swe.cartservice.catalog.CatalogClient;
+import com.swe.cartservice.client.catalog.CatalogClient;
+import com.swe.cartservice.client.order.CreateOrderItemRequest;
+import com.swe.cartservice.client.order.CreateOrderRequest;
+import com.swe.cartservice.client.order.OrderClient;
+import com.swe.cartservice.client.order.OrderResponse;
 import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.dto.CatalogProductResponse;
+import com.swe.cartservice.dto.CheckoutResponse;
 import com.swe.cartservice.dto.ProductStatus;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
 import com.swe.cartservice.exception.CatalogUnavailableException;
+import com.swe.cartservice.exception.EmptyCartException;
+import com.swe.cartservice.exception.OrderServiceUnavailableException;
 import com.swe.cartservice.exception.ProductNotAvailableException;
 import com.swe.cartservice.exception.ProductNotFoundException;
 import com.swe.cartservice.metrics.CartMetrics;
@@ -32,6 +39,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -48,6 +56,9 @@ class CartServiceImplTest {
 
     @Mock
     private CatalogClient catalogClient;
+
+    @Mock
+    private OrderClient orderClient;
 
     @InjectMocks
     private CartServiceImpl cartService;
@@ -415,6 +426,196 @@ class CartServiceImplTest {
             // Assert
             verify(cartRepository).deleteByCustomerId(customerId);
             verify(cartMetrics).cartCleared();
+        }
+    }
+
+    @Nested
+    @DisplayName("checkout")
+    class CheckoutTests {
+
+        @Test
+        @DisplayName("should successfully checkout valid cart, call order client, clear cart, and return checkout response")
+        void shouldCheckoutSuccessfully() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            UUID orderId = UUID.randomUUID();
+
+            Cart cart = new Cart(
+                    customerId,
+                    List.of(
+                            new CartItem(productId1, 2, new BigDecimal("19.99")),
+                            new CartItem(productId2, 1, new BigDecimal("29.99"))
+                    ),
+                    OffsetDateTime.now()
+            );
+
+            CatalogProductResponse product1 = new CatalogProductResponse(
+                    productId1, new BigDecimal("19.99"), "USD", ProductStatus.ACTIVE
+            );
+            CatalogProductResponse product2 = new CatalogProductResponse(
+                    productId2, new BigDecimal("29.99"), "USD", ProductStatus.ACTIVE
+            );
+
+            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(catalogClient.getProduct(productId1)).thenReturn(product1);
+            when(catalogClient.getProduct(productId2)).thenReturn(product2);
+
+            OrderResponse orderResponse = new OrderResponse(orderId, "PENDING");
+            when(orderClient.createOrder(eq(idempotencyKey), any(CreateOrderRequest.class))).thenReturn(orderResponse);
+
+            // Act
+            CheckoutResponse response = cartService.checkout(customerId, idempotencyKey);
+
+            // Assert
+            assertThat(response).isNotNull();
+            assertThat(response.orderId()).isEqualTo(orderId);
+            assertThat(response.status()).isEqualTo("PENDING");
+
+            ArgumentCaptor<CreateOrderRequest> orderRequestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+            verify(orderClient).createOrder(eq(idempotencyKey), orderRequestCaptor.capture());
+
+            CreateOrderRequest capturedRequest = orderRequestCaptor.getValue();
+            assertThat(capturedRequest.customerId()).isEqualTo(customerId);
+            assertThat(capturedRequest.items()).hasSize(2);
+            assertThat(capturedRequest.items())
+                    .extracting(CreateOrderItemRequest::productId)
+                    .containsExactly(productId1, productId2);
+            assertThat(capturedRequest.items())
+                    .extracting(CreateOrderItemRequest::quantity)
+                    .containsExactly(2, 1);
+
+            verify(cartRepository).deleteByCustomerId(customerId);
+        }
+
+        @Test
+        @DisplayName("should throw CartNotFoundException when cart does not exist")
+        void shouldThrowCartNotFoundExceptionWhenCartDoesNotExist() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(CartNotFoundException.class)
+                    .hasMessageContaining(customerId.toString());
+
+            verifyNoInteractions(catalogClient);
+            verifyNoInteractions(orderClient);
+            verify(cartRepository, never()).deleteByCustomerId(any());
+        }
+
+        @Test
+        @DisplayName("should throw EmptyCartException when cart items list is empty")
+        void shouldThrowEmptyCartExceptionWhenCartIsEmpty() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            Cart emptyCart = new Cart(customerId, List.of(), OffsetDateTime.now());
+            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(emptyCart));
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(EmptyCartException.class)
+                    .hasMessageContaining(customerId.toString());
+
+            verifyNoInteractions(catalogClient);
+            verifyNoInteractions(orderClient);
+            verify(cartRepository, never()).deleteByCustomerId(any());
+        }
+
+        @Test
+        @DisplayName("should throw ProductNotAvailableException when any product in cart is not ACTIVE")
+        void shouldThrowProductNotAvailableExceptionWhenProductNotActive() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            Cart cart = new Cart(
+                    customerId,
+                    List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
+                    OffsetDateTime.now()
+            );
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId1, new BigDecimal("10.00"), "USD", ProductStatus.RETIRED
+            );
+
+            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(catalogClient.getProduct(productId1)).thenReturn(product);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(ProductNotAvailableException.class)
+                    .hasMessageContaining(productId1.toString());
+
+            verifyNoInteractions(orderClient);
+            verify(cartRepository, never()).deleteByCustomerId(any());
+        }
+
+        @Test
+        @DisplayName("should propagate ProductNotFoundException when catalog client throws ProductNotFoundException")
+        void shouldPropagateProductNotFoundException() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            Cart cart = new Cart(
+                    customerId,
+                    List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
+                    OffsetDateTime.now()
+            );
+
+            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(catalogClient.getProduct(productId1)).thenThrow(new ProductNotFoundException(productId1));
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(ProductNotFoundException.class);
+
+            verifyNoInteractions(orderClient);
+            verify(cartRepository, never()).deleteByCustomerId(any());
+        }
+
+        @Test
+        @DisplayName("should propagate CatalogUnavailableException when catalog client is unavailable")
+        void shouldPropagateCatalogUnavailableException() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            Cart cart = new Cart(
+                    customerId,
+                    List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
+                    OffsetDateTime.now()
+            );
+
+            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(catalogClient.getProduct(productId1)).thenThrow(new CatalogUnavailableException());
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(CatalogUnavailableException.class);
+
+            verifyNoInteractions(orderClient);
+            verify(cartRepository, never()).deleteByCustomerId(any());
+        }
+
+        @Test
+        @DisplayName("should propagate OrderServiceUnavailableException and NOT delete cart when order service fails")
+        void shouldPropagateOrderServiceUnavailableException() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            Cart cart = new Cart(
+                    customerId,
+                    List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
+                    OffsetDateTime.now()
+            );
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId1, new BigDecimal("10.00"), "USD", ProductStatus.ACTIVE
+            );
+
+            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(catalogClient.getProduct(productId1)).thenReturn(product);
+            when(orderClient.createOrder(eq(idempotencyKey), any(CreateOrderRequest.class)))
+                    .thenThrow(new OrderServiceUnavailableException());
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(OrderServiceUnavailableException.class);
+
+            verify(cartRepository, never()).deleteByCustomerId(any());
         }
     }
 }

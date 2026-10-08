@@ -1,4 +1,4 @@
-package com.swe.cartservice.catalog;
+package com.swe.cartservice.client.catalog;
 
 import com.swe.cartservice.dto.CatalogProductResponse;
 import com.swe.cartservice.exception.CatalogUnavailableException;

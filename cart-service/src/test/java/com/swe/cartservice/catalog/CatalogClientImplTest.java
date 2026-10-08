@@ -1,5 +1,6 @@
 package com.swe.cartservice.catalog;
 
+import com.swe.cartservice.client.catalog.CatalogClientImpl;
 import com.swe.cartservice.dto.CatalogProductResponse;
 import com.swe.cartservice.dto.ProductStatus;
 import com.swe.cartservice.exception.CatalogUnavailableException;

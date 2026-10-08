@@ -1,11 +1,14 @@
 package com.swe.cartservice.controller;
 
 import com.swe.cartservice.dto.AddCartItemRequest;
+import com.swe.cartservice.dto.CheckoutResponse;
 import com.swe.cartservice.dto.UpdateCartItemRequest;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
 import com.swe.cartservice.exception.CatalogUnavailableException;
+import com.swe.cartservice.exception.EmptyCartException;
 import com.swe.cartservice.exception.GlobalExceptionHandler;
+import com.swe.cartservice.exception.OrderServiceUnavailableException;
 import com.swe.cartservice.exception.ProductNotAvailableException;
 import com.swe.cartservice.exception.ProductNotFoundException;
 import com.swe.cartservice.model.Cart;
@@ -371,6 +374,152 @@ class CartControllerTest {
                     .andExpect(status().isNoContent());
 
             verify(cartService).clearCart(customerId);
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /api/v1/carts/{customerId}/checkout")
+    class CheckoutEndpointTests {
+
+        @Test
+        @DisplayName("should return 200 OK and checkout response when checkout is successful")
+        void shouldReturn200WhenCheckoutSuccessful() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID orderId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            CheckoutResponse checkoutResponse = new CheckoutResponse(orderId, "PENDING");
+
+            when(cartService.checkout(customerId, idempotencyKey)).thenReturn(checkoutResponse);
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orderId").value(orderId.toString()))
+                    .andExpect(jsonPath("$.status").value("PENDING"));
+
+            verify(cartService).checkout(customerId, idempotencyKey);
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when Idempotency-Key header is missing")
+        void shouldReturn400WhenIdempotencyKeyMissing() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value("Missing required header: Idempotency-Key"));
+
+            verifyNoInteractions(cartService);
+        }
+
+        @Test
+        @DisplayName("should return 409 Conflict when cart is empty")
+        void shouldReturn409WhenCartIsEmpty() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            when(cartService.checkout(customerId, idempotencyKey)).thenThrow(new EmptyCartException(customerId));
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Cannot checkout an empty cart for customer: " + customerId));
+        }
+
+        @Test
+        @DisplayName("should return 404 Not Found when cart does not exist")
+        void shouldReturn404WhenCartNotFound() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            when(cartService.checkout(customerId, idempotencyKey)).thenThrow(new CartNotFoundException(customerId));
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.status").value(404))
+                    .andExpect(jsonPath("$.error").value("Not Found"))
+                    .andExpect(jsonPath("$.message").value("Cart not found for customer: " + customerId));
+        }
+
+        @Test
+        @DisplayName("should return 409 Conflict when product is not active")
+        void shouldReturn409WhenProductNotActive() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            when(cartService.checkout(customerId, idempotencyKey)).thenThrow(new ProductNotAvailableException(productId));
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Product is not available: " + productId));
+        }
+
+        @Test
+        @DisplayName("should return 404 Not Found when product is not found in catalog")
+        void shouldReturn404WhenProductNotFound() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            when(cartService.checkout(customerId, idempotencyKey)).thenThrow(new ProductNotFoundException(productId));
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.status").value(404))
+                    .andExpect(jsonPath("$.error").value("Not Found"))
+                    .andExpect(jsonPath("$.message").value("Product not found: " + productId));
+        }
+
+        @Test
+        @DisplayName("should return 503 Service Unavailable when catalog service is unavailable")
+        void shouldReturn503WhenCatalogUnavailable() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            when(cartService.checkout(customerId, idempotencyKey)).thenThrow(new CatalogUnavailableException());
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.status").value(503))
+                    .andExpect(jsonPath("$.error").value("Service Unavailable"))
+                    .andExpect(jsonPath("$.message").value("Catalog service is temporarily unavailable"));
+        }
+
+        @Test
+        @DisplayName("should return 503 Service Unavailable when order service is unavailable")
+        void shouldReturn503WhenOrderServiceUnavailable() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            when(cartService.checkout(customerId, idempotencyKey)).thenThrow(new OrderServiceUnavailableException());
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.status").value(503))
+                    .andExpect(jsonPath("$.error").value("Service Unavailable"))
+                    .andExpect(jsonPath("$.message").value("Orders service is temporarily unavailable"));
         }
     }
 
