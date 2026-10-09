@@ -23,6 +23,7 @@ import com.swe.ordersservice.repository.ProcessedEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,93 +38,46 @@ import java.util.UUID;
 public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
-    private final OutboxEventRepository outboxEventRepository;
-    private final OutboxEventFactory outboxEventFactory;
     private final ProcessedEventRepository processedEventRepository;
 
     private final OrderMetrics orderMetrics;
     private final AfterCommitExecutor afterCommitExecutor;
+    private final OrderCreationService orderCreationService;
 
     @Override
-    @Transactional
     public OrderResponse createOrder(String idempotencyKey, OrderRequest request) {
 
-        // Check Idempotency
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new InvalidIdempotencyKeyException();
         }
 
-        Optional<Order> existingOrder =
-                orderRepository.findByIdempotencyKey(idempotencyKey);
+        Optional<Order> existingOrder = orderRepository.findByIdempotencyKey(idempotencyKey);
 
         if (existingOrder.isPresent()) {
-            Order order = existingOrder.get();
-
-            return new OrderResponse(order.getId(), order.getStatus());
+            log.info("Idempotent order request: returning existing order");
+            return toResponse(existingOrder.get());
         }
-
-        // 1. Create the Order
-        Order order = Order.builder()
-                .customerId(request.customerId())
-                .status(OrderStatus.PENDING)
-                .idempotencyKey(idempotencyKey)
-                .build();
-
-        // 2. Create OrderItems and associate them with the Order
-        for (OrderItemRequest itemRequest : request.items()) {
-
-            OrderItem orderItem = OrderItem.builder()
-                    .productId(itemRequest.productId())
-                    .quantity(itemRequest.quantity())
-                    .build();
-
-            order.addItem(orderItem);
-        }
-
-        // 3. Persist the Order and all its items
-        Order savedOrder = orderRepository.save(order);
-
-        // 4. Create an OrderCreatedEvent and save it to the outbox
-        OrderCreatedEvent event = new OrderCreatedEvent(
-                UUID.randomUUID(),
-                savedOrder.getId(),
-                savedOrder.getCustomerId(),
-                savedOrder.getItems().stream()
-                        .map(item -> new OrderCreatedItem(
-                                item.getProductId(),
-                                item.getQuantity()
-                        ))
-                        .toList(),
-                Instant.now(),
-                1
-        );
-
-        String correlationId = MDC.get("correlationId");
-        if (correlationId == null || correlationId.isBlank()) {
-            correlationId = UUID.randomUUID().toString();
-            log.warn("Correlation ID missing while creating order; generated a new one");
-        }
-        // 5. Serialize the event and save it to the outbox
-        OutboxEvent outboxEvent = outboxEventFactory.create(event, correlationId);
-
-        outboxEventRepository.save(outboxEvent);
 
         try {
-            MDC.put("orderId", savedOrder.getId().toString());
-            MDC.put("eventId", event.eventId().toString());
+            return orderCreationService.create(idempotencyKey, request);
 
-            log.info("Order created");
-        } finally {
-            MDC.remove("orderId");
-            MDC.remove("eventId");
+        } catch (DataIntegrityViolationException ex) {
+
+            Optional<Order> concurrentOrder = orderRepository.findByIdempotencyKey(idempotencyKey);
+
+            if (concurrentOrder.isPresent()) {
+                log.info("Concurrent idempotent request: returning existing order");
+                return toResponse(concurrentOrder.get());
+            }
+
+            // Not an idempotency-key collision.
+            // Preserve the original database error.
+            throw ex;
         }
+    }
 
-        afterCommitExecutor.execute(orderMetrics::orderCreated);
-        // 6. Return the API response
-        return new OrderResponse(
-                savedOrder.getId(),
-                savedOrder.getStatus()
-        );
+    private OrderResponse toResponse(Order order) {
+        return new OrderResponse(order.getId(), order.getStatus());
     }
 
     @Override
