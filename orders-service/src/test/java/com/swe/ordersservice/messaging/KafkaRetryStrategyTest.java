@@ -15,6 +15,7 @@ import com.swe.ordersservice.repository.ProcessedEventRepository;
 import com.swe.ordersservice.metrics.AfterCommitExecutor;
 import com.swe.ordersservice.metrics.KafkaMetrics;
 import com.swe.ordersservice.metrics.OrderMetrics;
+import com.swe.ordersservice.service.OrderCreationService;
 import com.swe.ordersservice.service.OrderService;
 import com.swe.ordersservice.service.OrderServiceImpl;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -61,6 +62,9 @@ class KafkaRetryStrategyTest {
 
     @Mock
     private OutboxEventFactory outboxEventFactory;
+
+    @Mock
+    private OrderCreationService orderCreationService;
 
     @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
@@ -228,7 +232,7 @@ class KafkaRetryStrategyTest {
         @DisplayName("Scenario B: Restart before offset commit / redelivery -> Same event delivered again, processed_events prevents duplicate order transition")
         void shouldPreventDuplicateOrderStatusTransitionWhenEventRedeliveredAfterRestart() {
             com.swe.ordersservice.service.OrderServiceImpl orderServiceImpl = new com.swe.ordersservice.service.OrderServiceImpl(
-                    orderRepository, outboxEventRepository, outboxEventFactory, processedEventRepository, orderMetrics, afterCommitExecutor
+                    orderRepository, processedEventRepository, orderMetrics, afterCommitExecutor, orderCreationService
             );
 
             UUID eventId = UUID.randomUUID();
@@ -268,7 +272,7 @@ class KafkaRetryStrategyTest {
         @DisplayName("Scenario D: Orders replay -> Replay InventoryReserved and InventoryRejected -> No second state transition")
         void shouldIgnoreReplayOfAlreadyProcessedInventoryEvents() {
             com.swe.ordersservice.service.OrderServiceImpl orderServiceImpl = new com.swe.ordersservice.service.OrderServiceImpl(
-                    orderRepository, outboxEventRepository, outboxEventFactory, processedEventRepository, orderMetrics, afterCommitExecutor
+                    orderRepository, processedEventRepository, orderMetrics, afterCommitExecutor, orderCreationService
             );
 
             UUID reservedEventId = UUID.randomUUID();

@@ -8,16 +8,12 @@ import com.swe.ordersservice.entity.OrderStatus;
 import com.swe.ordersservice.entity.ProcessedEvent;
 import com.swe.ordersservice.event.InventoryRejectedEvent;
 import com.swe.ordersservice.event.InventoryReservedEvent;
-import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.exception.InvalidIdempotencyKeyException;
 import com.swe.ordersservice.exception.OrderNotFoundException;
-import com.swe.ordersservice.outbox.OutboxEvent;
-import com.swe.ordersservice.outbox.OutboxEventFactory;
-import com.swe.ordersservice.outbox.OutboxEventRepository;
-import com.swe.ordersservice.repository.OrderRepository;
-import com.swe.ordersservice.repository.ProcessedEventRepository;
 import com.swe.ordersservice.metrics.AfterCommitExecutor;
 import com.swe.ordersservice.metrics.OrderMetrics;
+import com.swe.ordersservice.repository.OrderRepository;
+import com.swe.ordersservice.repository.ProcessedEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -27,9 +23,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -46,12 +42,6 @@ class OrderServiceImplTest {
     private OrderRepository orderRepository;
 
     @Mock
-    private OutboxEventRepository outboxEventRepository;
-
-    @Mock
-    private OutboxEventFactory outboxEventFactory;
-
-    @Mock
     private ProcessedEventRepository processedEventRepository;
 
     @Mock
@@ -59,6 +49,9 @@ class OrderServiceImplTest {
 
     @Mock
     private AfterCommitExecutor afterCommitExecutor;
+
+    @Mock
+    private OrderCreationService orderCreationService;
 
     @InjectMocks
     private OrderServiceImpl orderService;
@@ -77,101 +70,37 @@ class OrderServiceImplTest {
     class CreateOrderTests {
 
         @Test
-        @DisplayName("should successfully create and persist order with items, idempotency key, and outbox event using MDC correlationId")
-        void shouldCreateOrderSuccessfullyWithMdcCorrelationId() {
+        @DisplayName("should successfully delegate order creation to OrderCreationService when idempotency key does not exist")
+        void shouldCreateOrderSuccessfullyWhenKeyDoesNotExist() {
             // Arrange
-            String correlationId = "test-correlation-" + UUID.randomUUID();
             String idempotencyKey = UUID.randomUUID().toString();
-            org.slf4j.MDC.put("correlationId", correlationId);
+            UUID customerId = UUID.randomUUID();
+            UUID generatedOrderId = UUID.randomUUID();
 
-            try {
-                UUID customerId = UUID.randomUUID();
-                UUID product1Id = UUID.randomUUID();
-                UUID product2Id = UUID.randomUUID();
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(UUID.randomUUID(), 2))
+            );
 
-                List<OrderItemRequest> itemRequests = List.of(
-                        new OrderItemRequest(product1Id, 2),
-                        new OrderItemRequest(product2Id, 5)
-                );
-                OrderRequest request = new OrderRequest(customerId, itemRequests);
+            OrderResponse expectedResponse = new OrderResponse(generatedOrderId, OrderStatus.PENDING);
 
-                UUID generatedOrderId = UUID.randomUUID();
-                when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.empty());
-                when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
-                    Order orderToSave = invocation.getArgument(0);
-                    orderToSave.setId(generatedOrderId);
-                    return orderToSave;
-                });
+            when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.empty());
+            when(orderCreationService.create(idempotencyKey, request)).thenReturn(expectedResponse);
 
-                OutboxEvent mockOutboxEvent = OutboxEvent.builder()
-                        .id(UUID.randomUUID())
-                        .aggregateType("Order")
-                        .aggregateId(generatedOrderId)
-                        .eventType("OrderCreated")
-                        .eventVersion(1)
-                        .correlationId(correlationId)
-                        .payload("{\"orderId\":\"" + generatedOrderId + "\"}")
-                        .createdAt(OffsetDateTime.now())
-                        .retryCount(0)
-                        .build();
+            // Act
+            OrderResponse response = orderService.createOrder(idempotencyKey, request);
 
-                when(outboxEventFactory.create(any(OrderCreatedEvent.class), eq(correlationId))).thenReturn(mockOutboxEvent);
+            // Assert
+            assertThat(response).isNotNull();
+            assertThat(response.orderId()).isEqualTo(generatedOrderId);
+            assertThat(response.status()).isEqualTo(OrderStatus.PENDING);
 
-                // Act
-                OrderResponse response = orderService.createOrder(idempotencyKey, request);
-
-                // Assert
-                assertThat(response).isNotNull();
-                assertThat(response.orderId()).isEqualTo(generatedOrderId);
-                assertThat(response.status()).isEqualTo(OrderStatus.PENDING);
-
-                // Verify order persistence
-                ArgumentCaptor<Order> orderCaptor = ArgumentCaptor.forClass(Order.class);
-                verify(orderRepository).save(orderCaptor.capture());
-
-                Order capturedOrder = orderCaptor.getValue();
-                assertThat(capturedOrder.getCustomerId()).isEqualTo(customerId);
-                assertThat(capturedOrder.getStatus()).isEqualTo(OrderStatus.PENDING);
-                assertThat(capturedOrder.getIdempotencyKey()).isEqualTo(idempotencyKey);
-                assertThat(capturedOrder.getItems()).hasSize(2);
-
-                assertThat(capturedOrder.getItems())
-                        .extracting("productId")
-                        .containsExactlyInAnyOrder(product1Id, product2Id);
-
-                assertThat(capturedOrder.getItems())
-                        .extracting("quantity")
-                        .containsExactlyInAnyOrder(2, 5);
-
-                capturedOrder.getItems().forEach(item ->
-                        assertThat(item.getOrder()).isSameAs(capturedOrder)
-                );
-
-                // Verify outbox event creation and persistence
-                ArgumentCaptor<OrderCreatedEvent> eventCaptor = ArgumentCaptor.forClass(OrderCreatedEvent.class);
-                verify(outboxEventFactory).create(eventCaptor.capture(), eq(correlationId));
-
-                OrderCreatedEvent capturedEvent = eventCaptor.getValue();
-                assertThat(capturedEvent.eventId()).isNotNull();
-                assertThat(capturedEvent.orderId()).isEqualTo(generatedOrderId);
-                assertThat(capturedEvent.customerId()).isEqualTo(customerId);
-                assertThat(capturedEvent.version()).isEqualTo(1);
-                assertThat(capturedEvent.occurredAt()).isNotNull();
-                assertThat(capturedEvent.items()).hasSize(2);
-                assertThat(capturedEvent.items())
-                        .extracting("productId")
-                        .containsExactlyInAnyOrder(product1Id, product2Id);
-
-                verify(outboxEventRepository).save(mockOutboxEvent);
-                verify(afterCommitExecutor).execute(any());
-                verify(orderMetrics).orderCreated();
-            } finally {
-                org.slf4j.MDC.remove("correlationId");
-            }
+            verify(orderRepository).findByIdempotencyKey(idempotencyKey);
+            verify(orderCreationService).create(idempotencyKey, request);
         }
 
         @Test
-        @DisplayName("should return existing order and skip processing when idempotency key already exists")
+        @DisplayName("should return existing order and skip OrderCreationService when idempotency key already exists")
         void shouldReturnExistingOrderWhenIdempotencyKeyExists() {
             // Arrange
             String idempotencyKey = UUID.randomUUID().toString();
@@ -199,10 +128,70 @@ class OrderServiceImplTest {
             assertThat(response.status()).isEqualTo(OrderStatus.PENDING);
 
             verify(orderRepository).findByIdempotencyKey(idempotencyKey);
-            verify(orderRepository, never()).save(any());
-            verifyNoInteractions(outboxEventFactory);
-            verifyNoInteractions(outboxEventRepository);
-            verifyNoInteractions(orderMetrics);
+            verifyNoInteractions(orderCreationService);
+        }
+
+        @Test
+        @DisplayName("should recover and return concurrent order when DataIntegrityViolation occurs and concurrent order exists")
+        void shouldReturnConcurrentOrderWhenDataIntegrityViolationOccurs() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            UUID concurrentOrderId = UUID.randomUUID();
+            Order concurrentOrder = Order.builder()
+                    .id(concurrentOrderId)
+                    .customerId(UUID.randomUUID())
+                    .status(OrderStatus.PENDING)
+                    .idempotencyKey(idempotencyKey)
+                    .build();
+
+            OrderRequest request = new OrderRequest(
+                    UUID.randomUUID(),
+                    List.of(new OrderItemRequest(UUID.randomUUID(), 1))
+            );
+
+            // Initial check: empty
+            // Catch block check: finds concurrent order
+            when(orderRepository.findByIdempotencyKey(idempotencyKey))
+                    .thenReturn(Optional.empty())
+                    .thenReturn(Optional.of(concurrentOrder));
+
+            when(orderCreationService.create(idempotencyKey, request))
+                    .thenThrow(new DataIntegrityViolationException("Unique constraint violation on idempotency_key"));
+
+            // Act
+            OrderResponse response = orderService.createOrder(idempotencyKey, request);
+
+            // Assert
+            assertThat(response).isNotNull();
+            assertThat(response.orderId()).isEqualTo(concurrentOrderId);
+            assertThat(response.status()).isEqualTo(OrderStatus.PENDING);
+
+            verify(orderRepository, times(2)).findByIdempotencyKey(idempotencyKey);
+            verify(orderCreationService).create(idempotencyKey, request);
+        }
+
+        @Test
+        @DisplayName("should rethrow DataIntegrityViolationException when no concurrent order is found")
+        void shouldRethrowDataIntegrityViolationExceptionWhenNoConcurrentOrderFound() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            OrderRequest request = new OrderRequest(
+                    UUID.randomUUID(),
+                    List.of(new OrderItemRequest(UUID.randomUUID(), 1))
+            );
+
+            DataIntegrityViolationException databaseException =
+                    new DataIntegrityViolationException("Foreign key violation or check constraint");
+
+            when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.empty());
+            when(orderCreationService.create(idempotencyKey, request)).thenThrow(databaseException);
+
+            // Act & Assert
+            assertThatThrownBy(() -> orderService.createOrder(idempotencyKey, request))
+                    .isSameAs(databaseException);
+
+            verify(orderRepository, times(2)).findByIdempotencyKey(idempotencyKey);
+            verify(orderCreationService).create(idempotencyKey, request);
         }
 
         @Test
@@ -220,9 +209,7 @@ class OrderServiceImplTest {
                     .hasMessage("Idempotency-Key must not be blank");
 
             verifyNoInteractions(orderRepository);
-            verifyNoInteractions(outboxEventFactory);
-            verifyNoInteractions(outboxEventRepository);
-            verifyNoInteractions(orderMetrics);
+            verifyNoInteractions(orderCreationService);
         }
 
         @Test
@@ -240,54 +227,12 @@ class OrderServiceImplTest {
                     .hasMessage("Idempotency-Key must not be blank");
 
             verifyNoInteractions(orderRepository);
-            verifyNoInteractions(outboxEventFactory);
-            verifyNoInteractions(outboxEventRepository);
-            verifyNoInteractions(orderMetrics);
+            verifyNoInteractions(orderCreationService);
         }
 
         @Test
-        @DisplayName("should generate new correlationId when MDC is blank")
-        void shouldGenerateNewCorrelationIdWhenMdcIsBlank() {
-            // Arrange
-            org.slf4j.MDC.remove("correlationId");
-            String idempotencyKey = UUID.randomUUID().toString();
-
-            UUID customerId = UUID.randomUUID();
-            OrderRequest request = new OrderRequest(
-                    customerId,
-                    List.of(new OrderItemRequest(UUID.randomUUID(), 1))
-            );
-
-            UUID generatedOrderId = UUID.randomUUID();
-            when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.empty());
-            when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
-                Order orderToSave = invocation.getArgument(0);
-                orderToSave.setId(generatedOrderId);
-                return orderToSave;
-            });
-
-            OutboxEvent mockOutboxEvent = OutboxEvent.builder().build();
-            when(outboxEventFactory.create(any(OrderCreatedEvent.class), anyString())).thenReturn(mockOutboxEvent);
-
-            // Act
-            OrderResponse response = orderService.createOrder(idempotencyKey, request);
-
-            // Assert
-            assertThat(response).isNotNull();
-
-            ArgumentCaptor<String> correlationIdCaptor = ArgumentCaptor.forClass(String.class);
-            verify(outboxEventFactory).create(any(OrderCreatedEvent.class), correlationIdCaptor.capture());
-
-            String passedCorrelationId = correlationIdCaptor.getValue();
-            assertThat(passedCorrelationId).isNotBlank();
-            // Validate it's a valid UUID
-            assertThat(UUID.fromString(passedCorrelationId)).isNotNull();
-            verify(outboxEventRepository).save(mockOutboxEvent);
-        }
-
-        @Test
-        @DisplayName("should propagate exception when repository save fails")
-        void shouldPropagateExceptionWhenRepositoryFails() {
+        @DisplayName("should propagate unexpected RuntimeException from OrderCreationService")
+        void shouldPropagateUnexpectedExceptionFromOrderCreationService() {
             // Arrange
             String idempotencyKey = UUID.randomUUID().toString();
             OrderRequest request = new OrderRequest(
@@ -296,79 +241,16 @@ class OrderServiceImplTest {
             );
 
             when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.empty());
-            when(orderRepository.save(any(Order.class)))
-                    .thenThrow(new RuntimeException("Database connectivity failure"));
-
-            // Act & Assert
-            assertThatThrownBy(() -> orderService.createOrder(idempotencyKey, request))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessage("Database connectivity failure");
-
-            verify(orderRepository).save(any(Order.class));
-            verifyNoInteractions(outboxEventFactory);
-            verifyNoInteractions(outboxEventRepository);
-        }
-
-        @Test
-        @DisplayName("should propagate exception when outbox event creation fails")
-        void shouldPropagateExceptionWhenOutboxFactoryFails() {
-            // Arrange
-            String idempotencyKey = UUID.randomUUID().toString();
-            OrderRequest request = new OrderRequest(
-                    UUID.randomUUID(),
-                    List.of(new OrderItemRequest(UUID.randomUUID(), 1))
-            );
-
-            when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.empty());
-            when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
-                Order orderToSave = invocation.getArgument(0);
-                orderToSave.setId(UUID.randomUUID());
-                return orderToSave;
-            });
-
-            when(outboxEventFactory.create(any(OrderCreatedEvent.class), anyString()))
-                    .thenThrow(new IllegalStateException("Failed to serialize OrderCreatedEvent"));
+            when(orderCreationService.create(idempotencyKey, request))
+                    .thenThrow(new IllegalStateException("Unexpected server error"));
 
             // Act & Assert
             assertThatThrownBy(() -> orderService.createOrder(idempotencyKey, request))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessage("Failed to serialize OrderCreatedEvent");
+                    .hasMessage("Unexpected server error");
 
-            verify(orderRepository).save(any(Order.class));
-            verify(outboxEventFactory).create(any(OrderCreatedEvent.class), anyString());
-            verifyNoInteractions(outboxEventRepository);
-        }
-
-        @Test
-        @DisplayName("should propagate exception when outbox repository save fails")
-        void shouldPropagateExceptionWhenOutboxRepositoryFails() {
-            // Arrange
-            String idempotencyKey = UUID.randomUUID().toString();
-            OrderRequest request = new OrderRequest(
-                    UUID.randomUUID(),
-                    List.of(new OrderItemRequest(UUID.randomUUID(), 1))
-            );
-
-            when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.empty());
-            when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
-                Order orderToSave = invocation.getArgument(0);
-                orderToSave.setId(UUID.randomUUID());
-                return orderToSave;
-            });
-
-            OutboxEvent mockOutboxEvent = OutboxEvent.builder().build();
-            when(outboxEventFactory.create(any(OrderCreatedEvent.class), anyString())).thenReturn(mockOutboxEvent);
-            when(outboxEventRepository.save(mockOutboxEvent))
-                    .thenThrow(new RuntimeException("Outbox persistence failure"));
-
-            // Act & Assert
-            assertThatThrownBy(() -> orderService.createOrder(idempotencyKey, request))
-                    .isInstanceOf(RuntimeException.class)
-                    .hasMessage("Outbox persistence failure");
-
-            verify(orderRepository).save(any(Order.class));
-            verify(outboxEventFactory).create(any(OrderCreatedEvent.class), anyString());
-            verify(outboxEventRepository).save(mockOutboxEvent);
+            verify(orderRepository, times(1)).findByIdempotencyKey(idempotencyKey);
+            verify(orderCreationService).create(idempotencyKey, request);
         }
     }
 
