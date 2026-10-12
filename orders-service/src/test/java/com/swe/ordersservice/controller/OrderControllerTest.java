@@ -6,6 +6,7 @@ import com.swe.ordersservice.dto.OrderRequest;
 import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.OrderStatus;
 import com.swe.ordersservice.exception.GlobalExceptionHandler;
+import com.swe.ordersservice.exception.IdempotencyConflictException;
 import com.swe.ordersservice.exception.InvalidIdempotencyKeyException;
 import com.swe.ordersservice.exception.OrderNotFoundException;
 import com.swe.ordersservice.service.OrderService;
@@ -132,6 +133,34 @@ class OrderControllerTest {
                     .andExpect(jsonPath("$.status").value(400))
                     .andExpect(jsonPath("$.error").value("Bad Request"))
                     .andExpect(jsonPath("$.message").value("Idempotency-Key must not be blank"));
+        }
+
+        @Test
+        @DisplayName("should return 409 Conflict when service throws IdempotencyConflictException")
+        void createOrder_WhenIdempotencyConflict_ShouldReturn409Conflict() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(productId, 1))
+            );
+
+            when(orderService.createOrder(eq(idempotencyKey), any(OrderRequest.class)))
+                    .thenThrow(new IdempotencyConflictException("Idempotency key already belongs to another customer"));
+
+            // Act & Assert
+            mockMvc.perform(post(ORDERS_URL)
+                            .header("Idempotency-Key", idempotencyKey)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Idempotency key already belongs to another customer"))
+                    .andExpect(jsonPath("$.path").value(ORDERS_URL));
         }
 
         @Test

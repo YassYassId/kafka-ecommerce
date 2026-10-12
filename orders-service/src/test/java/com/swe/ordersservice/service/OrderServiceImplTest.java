@@ -4,6 +4,7 @@ import com.swe.ordersservice.dto.OrderItemRequest;
 import com.swe.ordersservice.dto.OrderRequest;
 import com.swe.ordersservice.dto.OrderResponse;
 import com.swe.ordersservice.entity.Order;
+import com.swe.ordersservice.entity.OrderItem;
 import com.swe.ordersservice.entity.OrderStatus;
 import com.swe.ordersservice.entity.ProcessedEvent;
 import com.swe.ordersservice.event.InventoryRejectedEvent;
@@ -105,18 +106,22 @@ class OrderServiceImplTest {
             // Arrange
             String idempotencyKey = UUID.randomUUID().toString();
             UUID existingOrderId = UUID.randomUUID();
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+
             Order existingOrder = Order.builder()
                     .id(existingOrderId)
-                    .customerId(UUID.randomUUID())
+                    .customerId(customerId)
                     .status(OrderStatus.PENDING)
                     .idempotencyKey(idempotencyKey)
+                    .items(List.of(OrderItem.builder().productId(productId).quantity(1).build()))
                     .build();
 
             when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.of(existingOrder));
 
             OrderRequest request = new OrderRequest(
-                    UUID.randomUUID(),
-                    List.of(new OrderItemRequest(UUID.randomUUID(), 1))
+                    customerId,
+                    List.of(new OrderItemRequest(productId, 1))
             );
 
             // Act
@@ -132,21 +137,85 @@ class OrderServiceImplTest {
         }
 
         @Test
+        @DisplayName("should throw IdempotencyConflictException when existing order belongs to different customer")
+        void shouldThrowIdempotencyConflictExceptionWhenCustomerIdDiffers() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            UUID customerId1 = UUID.randomUUID();
+            UUID customerId2 = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+
+            Order existingOrder = Order.builder()
+                    .id(UUID.randomUUID())
+                    .customerId(customerId1)
+                    .status(OrderStatus.PENDING)
+                    .idempotencyKey(idempotencyKey)
+                    .items(List.of(OrderItem.builder().productId(productId).quantity(1).build()))
+                    .build();
+
+            when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.of(existingOrder));
+
+            OrderRequest request = new OrderRequest(
+                    customerId2,
+                    List.of(new OrderItemRequest(productId, 1))
+            );
+
+            // Act & Assert
+            assertThatThrownBy(() -> orderService.createOrder(idempotencyKey, request))
+                    .isInstanceOf(com.swe.ordersservice.exception.IdempotencyConflictException.class)
+                    .hasMessage("Idempotency key already belongs to another customer");
+        }
+
+        @Test
+        @DisplayName("should throw IdempotencyConflictException when existing order has different items")
+        void shouldThrowIdempotencyConflictExceptionWhenOrderItemsDiffer() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            UUID customerId = UUID.randomUUID();
+            UUID productId1 = UUID.randomUUID();
+            UUID productId2 = UUID.randomUUID();
+
+            Order existingOrder = Order.builder()
+                    .id(UUID.randomUUID())
+                    .customerId(customerId)
+                    .status(OrderStatus.PENDING)
+                    .idempotencyKey(idempotencyKey)
+                    .items(List.of(OrderItem.builder().productId(productId1).quantity(1).build()))
+                    .build();
+
+            when(orderRepository.findByIdempotencyKey(idempotencyKey)).thenReturn(Optional.of(existingOrder));
+
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(productId2, 1))
+            );
+
+            // Act & Assert
+            assertThatThrownBy(() -> orderService.createOrder(idempotencyKey, request))
+                    .isInstanceOf(com.swe.ordersservice.exception.IdempotencyConflictException.class)
+                    .hasMessage("Idempotency key was already used with different Order items");
+        }
+
+        @Test
         @DisplayName("should recover and return concurrent order when DataIntegrityViolation occurs and concurrent order exists")
         void shouldReturnConcurrentOrderWhenDataIntegrityViolationOccurs() {
             // Arrange
             String idempotencyKey = UUID.randomUUID().toString();
             UUID concurrentOrderId = UUID.randomUUID();
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+
             Order concurrentOrder = Order.builder()
                     .id(concurrentOrderId)
-                    .customerId(UUID.randomUUID())
+                    .customerId(customerId)
                     .status(OrderStatus.PENDING)
                     .idempotencyKey(idempotencyKey)
+                    .items(List.of(OrderItem.builder().productId(productId).quantity(1).build()))
                     .build();
 
             OrderRequest request = new OrderRequest(
-                    UUID.randomUUID(),
-                    List.of(new OrderItemRequest(UUID.randomUUID(), 1))
+                    customerId,
+                    List.of(new OrderItemRequest(productId, 1))
             );
 
             // Initial check: empty

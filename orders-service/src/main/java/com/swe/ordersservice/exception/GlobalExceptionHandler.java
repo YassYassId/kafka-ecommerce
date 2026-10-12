@@ -127,4 +127,14 @@ public class GlobalExceptionHandler {
                 request.getRequestURI()
         ));
     }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<ErrorResponse> handleIdempotencyConflict(IdempotencyConflictException ex, HttpServletRequest request) {
+
+        log.warn("Idempotency conflict on path {}: {}", request.getRequestURI(), ex.getMessage());
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                new ErrorResponse(HttpStatus.CONFLICT.value(), HttpStatus.CONFLICT.getReasonPhrase(),
+                        ex.getMessage(), request.getRequestURI()));
+    }
 }

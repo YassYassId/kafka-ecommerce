@@ -11,6 +11,7 @@ import com.swe.ordersservice.event.InventoryRejectedEvent;
 import com.swe.ordersservice.event.InventoryReservedEvent;
 import com.swe.ordersservice.event.OrderCreatedEvent;
 import com.swe.ordersservice.event.OrderCreatedItem;
+import com.swe.ordersservice.exception.IdempotencyConflictException;
 import com.swe.ordersservice.exception.InvalidIdempotencyKeyException;
 import com.swe.ordersservice.exception.OrderNotFoundException;
 import com.swe.ordersservice.metrics.AfterCommitExecutor;
@@ -29,8 +30,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -55,7 +59,7 @@ public class OrderServiceImpl implements OrderService {
 
         if (existingOrder.isPresent()) {
             log.info("Idempotent order request: returning existing order");
-            return toResponse(existingOrder.get());
+            return replayOrder(existingOrder.get(), request);
         }
 
         try {
@@ -67,7 +71,7 @@ public class OrderServiceImpl implements OrderService {
 
             if (concurrentOrder.isPresent()) {
                 log.info("Concurrent idempotent request: returning existing order");
-                return toResponse(concurrentOrder.get());
+                return replayOrder(concurrentOrder.get(), request);
             }
 
             // Not an idempotency-key collision.
@@ -78,6 +82,27 @@ public class OrderServiceImpl implements OrderService {
 
     private OrderResponse toResponse(Order order) {
         return new OrderResponse(order.getId(), order.getStatus());
+    }
+
+    private OrderResponse replayOrder(Order order, OrderRequest request) {
+
+        if (!order.getCustomerId().equals(request.customerId())) {
+            throw new IdempotencyConflictException("Idempotency key already belongs to another customer");
+        }
+
+        List<OrderItem> items = order.getItems() != null ? order.getItems() : List.of();
+        Map<UUID, Integer> existingItems = items.stream()
+                .collect(Collectors.toMap(OrderItem::getProductId, OrderItem::getQuantity, Integer::sum));
+
+        List<OrderItemRequest> reqItems = request.items() != null ? request.items() : List.of();
+        Map<UUID, Integer> requestedItems = reqItems.stream()
+                .collect(Collectors.toMap(OrderItemRequest::productId, OrderItemRequest::quantity, Integer::sum));
+
+        if (!existingItems.equals(requestedItems)) {
+            throw new IdempotencyConflictException("Idempotency key was already used with different Order items");
+        }
+
+        return toResponse(order);
     }
 
     @Override

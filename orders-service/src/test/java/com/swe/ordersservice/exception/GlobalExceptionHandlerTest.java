@@ -177,4 +177,22 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message()).isEqualTo("Missing required header: Idempotency-Key");
         assertThat(response.getBody().path()).isEqualTo("/api/v1/orders");
     }
+
+    @Test
+    @DisplayName("handleIdempotencyConflict should return 409 Conflict")
+    void handleIdempotencyConflict_ShouldReturn409() {
+        // Arrange
+        IdempotencyConflictException ex = new IdempotencyConflictException("Idempotency key already belongs to another customer");
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleIdempotencyConflict(ex, request);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(409);
+        assertThat(response.getBody().error()).isEqualTo("Conflict");
+        assertThat(response.getBody().message()).isEqualTo("Idempotency key already belongs to another customer");
+        assertThat(response.getBody().path()).isEqualTo("/api/v1/orders");
+    }
 }
