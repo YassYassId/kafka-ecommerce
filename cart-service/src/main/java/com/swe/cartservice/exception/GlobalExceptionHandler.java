@@ -177,4 +177,19 @@ public class GlobalExceptionHandler {
                 "Missing required header: " + ex.getHeaderName()
         ));
     }
+
+    @ExceptionHandler(CheckoutConflictException.class)
+    public ResponseEntity<ErrorResponse> handleCheckoutConflict(CheckoutConflictException ex) {
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(OffsetDateTime.now(),
+                HttpStatus.CONFLICT.value(), HttpStatus.CONFLICT.getReasonPhrase(), ex.getMessage()));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
+
+        return ResponseEntity.badRequest()
+                .body(new ErrorResponse(OffsetDateTime.now(),
+                        HttpStatus.BAD_REQUEST.value(), HttpStatus.BAD_REQUEST.getReasonPhrase(), ex.getMessage()));
+    }
 }

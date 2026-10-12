@@ -9,6 +9,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
 import java.math.BigDecimal;
@@ -31,6 +32,12 @@ class RedisCartRepositoryTest {
     @Mock
     private ValueOperations<String, Cart> valueOperations;
 
+    @Mock
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Mock
+    private ValueOperations<String, String> stringValueOperations;
+
     private RedisCartRepository cartRepository;
 
     private UUID customerId;
@@ -38,7 +45,7 @@ class RedisCartRepositoryTest {
 
     @BeforeEach
     void setUp() {
-        cartRepository = new RedisCartRepository(redisTemplate);
+        cartRepository = new RedisCartRepository(redisTemplate, stringRedisTemplate);
         customerId = UUID.randomUUID();
         sampleCart = new Cart(
                 customerId,
@@ -101,5 +108,36 @@ class RedisCartRepositoryTest {
 
         // Assert
         verify(redisTemplate).delete("cart:" + customerId);
+    }
+
+    @Test
+    @DisplayName("findRawCartByCustomerId should return JSON string when key exists")
+    void findRawCartByCustomerId_WhenKeyExists_ShouldReturnRawJson() {
+        // Arrange
+        String rawJson = "{\"customerId\":\"" + customerId + "\",\"items\":[]}";
+        when(stringRedisTemplate.opsForValue()).thenReturn(stringValueOperations);
+        when(stringValueOperations.get("cart:" + customerId)).thenReturn(rawJson);
+
+        // Act
+        Optional<String> result = cartRepository.findRawCartByCustomerId(customerId);
+
+        // Assert
+        assertThat(result).contains(rawJson);
+        verify(stringValueOperations).get("cart:" + customerId);
+    }
+
+    @Test
+    @DisplayName("findRawCartByCustomerId should return empty Optional when key does not exist")
+    void findRawCartByCustomerId_WhenKeyDoesNotExist_ShouldReturnEmptyOptional() {
+        // Arrange
+        when(stringRedisTemplate.opsForValue()).thenReturn(stringValueOperations);
+        when(stringValueOperations.get("cart:" + customerId)).thenReturn(null);
+
+        // Act
+        Optional<String> result = cartRepository.findRawCartByCustomerId(customerId);
+
+        // Assert
+        assertThat(result).isEmpty();
+        verify(stringValueOperations).get("cart:" + customerId);
     }
 }

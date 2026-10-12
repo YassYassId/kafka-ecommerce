@@ -6,6 +6,7 @@ import com.swe.cartservice.dto.UpdateCartItemRequest;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
 import com.swe.cartservice.exception.CatalogUnavailableException;
+import com.swe.cartservice.exception.CheckoutConflictException;
 import com.swe.cartservice.exception.EmptyCartException;
 import com.swe.cartservice.exception.GlobalExceptionHandler;
 import com.swe.cartservice.exception.OrderServiceUnavailableException;
@@ -520,6 +521,41 @@ class CartControllerTest {
                     .andExpect(jsonPath("$.status").value(503))
                     .andExpect(jsonPath("$.error").value("Service Unavailable"))
                     .andExpect(jsonPath("$.message").value("Orders service is temporarily unavailable"));
+        }
+
+        @Test
+        @DisplayName("should return 409 Conflict when checkout conflict occurs")
+        void shouldReturn409WhenCheckoutConflict() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            when(cartService.checkout(customerId, idempotencyKey)).thenThrow(new CheckoutConflictException());
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Cart changed during checkout. Please review your cart and retry."));
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when service throws IllegalArgumentException for blank key")
+        void shouldReturn400WhenIllegalArgumentException() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            String idempotencyKey = " ";
+            when(cartService.checkout(customerId, idempotencyKey))
+                    .thenThrow(new IllegalArgumentException("Idempotency-Key must not be blank"));
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/checkout", customerId)
+                            .header("Idempotency-Key", idempotencyKey))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value("Idempotency-Key must not be blank"));
         }
     }
 

@@ -9,15 +9,15 @@ import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.dto.CatalogProductResponse;
 import com.swe.cartservice.dto.CheckoutResponse;
 import com.swe.cartservice.dto.ProductStatus;
-import com.swe.cartservice.exception.CartItemNotFoundException;
-import com.swe.cartservice.exception.CartNotFoundException;
-import com.swe.cartservice.exception.EmptyCartException;
-import com.swe.cartservice.exception.ProductNotAvailableException;
+import com.swe.cartservice.exception.*;
 import com.swe.cartservice.metrics.CartMetrics;
 import com.swe.cartservice.model.Cart;
 import com.swe.cartservice.model.CartItem;
+import com.swe.cartservice.model.CheckoutRecord;
 import com.swe.cartservice.repository.CartRepository;
+import com.swe.cartservice.repository.CheckoutRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
@@ -28,12 +28,14 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class CartServiceImpl implements CartService {
 
     private final CartRepository cartRepository;
     private final CartMetrics cartMetrics;
     private final CatalogClient catalogClient;
     private final OrderClient orderClient;
+    private final CheckoutRepository checkoutRepository;
 
     @Override
     public Cart getCart(UUID customerId) {
@@ -146,42 +148,86 @@ public class CartServiceImpl implements CartService {
     @Override
     public CheckoutResponse checkout(UUID customerId, String idempotencyKey) {
 
-        Cart cart = cartRepository.findByCustomerId(customerId)
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException("Idempotency-Key must not be blank");
+        }
+
+        // 1. Return a previous completed checkout.
+        Optional<CheckoutRecord> previous = checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey);
+
+        if (previous.isPresent()) {
+            CheckoutRecord record = previous.get();
+
+            log.info("Replaying completed checkout: customerId={}, orderId={}",
+                    customerId, record.orderId());
+
+            return new CheckoutResponse(record.orderId(), record.status());
+        }
+
+        // 2. Read the original cart snapshot.
+        String originalCartJson = cartRepository.findRawCartByCustomerId(customerId)
                 .orElseThrow(() -> new CartNotFoundException(customerId));
 
-        if (cart.items().isEmpty()) {
-            throw new EmptyCartException(customerId);
+        // 3. Acquire checkout claim BEFORE calling Orders.
+        boolean claimed = checkoutRepository.claimCheckout(customerId, idempotencyKey, originalCartJson);
+
+        log.info("Checkout claim: customerId={}, key={}, claimed={}", customerId, idempotencyKey, claimed);
+
+        if (!claimed) {
+            throw new CheckoutConflictException();
         }
 
-        List<CreateOrderItemRequest> orderItems = new ArrayList<>();
+        CreateOrderRequest orderRequest;
 
-        for (CartItem item : cart.items()) {
+        // 4. Validate cart and products.
+        // These operations happen before contacting Orders.
+        try {
+            Cart cart = cartRepository.findByCustomerId(customerId)
+                    .orElseThrow(() -> new CartNotFoundException(customerId));
 
-            CatalogProductResponse product = catalogClient.getProduct(item.productId());
-
-            if (product.status() != ProductStatus.ACTIVE) {
-                throw new ProductNotAvailableException(item.productId());
+            if (cart.items().isEmpty()) {
+                throw new EmptyCartException(customerId);
             }
 
-            /*
-             * product.price() is authoritative here.
-             *
-             * The current Orders model does not yet persist prices,
-             * so there is nothing to send yet.
-             *
-             * This validation still ensures the cart is checked
-             * against current Catalog state immediately before order
-             * creation.
-             */
+            List<CreateOrderItemRequest> orderItems = new ArrayList<>();
 
-            orderItems.add(new CreateOrderItemRequest(item.productId(), item.quantity()));
+            for (CartItem item : cart.items()) {
+
+                CatalogProductResponse product = catalogClient.getProduct(item.productId());
+
+                if (product.status() != ProductStatus.ACTIVE) {
+                    throw new ProductNotAvailableException(item.productId());
+                }
+
+                orderItems.add(new CreateOrderItemRequest(item.productId(), item.quantity()));
+            }
+
+            orderRequest = new CreateOrderRequest(customerId, List.copyOf(orderItems));
+
+        } catch (RuntimeException ex) {
+
+            // Safe to release because Orders has not been contacted.
+            checkoutRepository.releaseClaim(customerId, idempotencyKey);
+
+            throw ex;
         }
 
-        CreateOrderRequest orderRequest = new CreateOrderRequest(customerId, List.copyOf(orderItems));
-
+        // 5. Create or replay the Order.
+        // Do NOT automatically release the claim after this call starts.
         OrderResponse order = orderClient.createOrder(idempotencyKey, orderRequest);
 
-        cartRepository.deleteByCustomerId(customerId);
+        log.info("Order created/replayed: customerId={}, orderId={}", customerId, order.orderId());
+
+        // 6. Atomically persist checkout result, delete cart, release claim.
+        CheckoutRecord record = new CheckoutRecord(customerId, idempotencyKey, order.orderId(), order.status());
+
+        boolean completed = checkoutRepository.completeCheckout(record, originalCartJson);
+
+        log.info("Checkout completion: customerId={}, completed={}", customerId, completed);
+
+        if (!completed) {
+            throw new CheckoutConflictException();
+        }
 
         return new CheckoutResponse(order.orderId(), order.status());
     }

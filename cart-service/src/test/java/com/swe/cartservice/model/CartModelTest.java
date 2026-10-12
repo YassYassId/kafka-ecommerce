@@ -7,6 +7,7 @@ import com.swe.cartservice.dto.UpdateCartItemRequest;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
 import com.swe.cartservice.exception.CatalogUnavailableException;
+import com.swe.cartservice.exception.CheckoutConflictException;
 import com.swe.cartservice.exception.ProductNotAvailableException;
 import com.swe.cartservice.exception.ProductNotFoundException;
 import org.junit.jupiter.api.DisplayName;
@@ -113,5 +114,27 @@ class CartModelTest {
         CatalogUnavailableException catalogUnavailableEx2 = new CatalogUnavailableException(cause);
         assertThat(catalogUnavailableEx2.getMessage()).isEqualTo("Catalog service is temporarily unavailable");
         assertThat(catalogUnavailableEx2.getCause()).isEqualTo(cause);
+
+        CheckoutConflictException conflictEx = new CheckoutConflictException();
+        assertThat(conflictEx.getMessage()).isEqualTo("Cart changed during checkout. Please review your cart and retry.");
+    }
+
+    @Test
+    @DisplayName("CheckoutRecord should hold values and support equality")
+    void testCheckoutRecord() {
+        UUID customerId = UUID.randomUUID();
+        String idempotencyKey = UUID.randomUUID().toString();
+        UUID orderId = UUID.randomUUID();
+        String status = "PENDING";
+
+        CheckoutRecord record1 = new CheckoutRecord(customerId, idempotencyKey, orderId, status);
+        CheckoutRecord record2 = new CheckoutRecord(customerId, idempotencyKey, orderId, status);
+
+        assertThat(record1).isEqualTo(record2);
+        assertThat(record1.hashCode()).isEqualTo(record2.hashCode());
+        assertThat(record1.customerId()).isEqualTo(customerId);
+        assertThat(record1.idempotencyKey()).isEqualTo(idempotencyKey);
+        assertThat(record1.orderId()).isEqualTo(orderId);
+        assertThat(record1.status()).isEqualTo(status);
     }
 }

@@ -12,4 +12,6 @@ public interface CartRepository {
     void save(Cart cart);
 
     void deleteByCustomerId(UUID customerId);
+
+    Optional<String> findRawCartByCustomerId(UUID customerId);
 }

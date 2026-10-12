@@ -3,6 +3,7 @@ package com.swe.cartservice.repository;
 import com.swe.cartservice.model.Cart;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.time.Duration;
@@ -16,6 +17,7 @@ public class RedisCartRepository implements CartRepository {
     private static final Duration CART_TTL = Duration.ofDays(7);
 
     private final RedisTemplate<String, Cart> redisTemplate;
+    private final StringRedisTemplate stringRedisTemplate;
 
     @Override
     public Optional<Cart> findByCustomerId(UUID customerId) {
@@ -32,6 +34,11 @@ public class RedisCartRepository implements CartRepository {
     @Override
     public void deleteByCustomerId(UUID customerId) {
         redisTemplate.delete(key(customerId));
+    }
+
+    @Override
+    public Optional<String> findRawCartByCustomerId(UUID customerId) {
+        return Optional.ofNullable(stringRedisTemplate.opsForValue().get(key(customerId)));
     }
 
     private String key(UUID customerId) {

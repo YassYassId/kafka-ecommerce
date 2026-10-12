@@ -258,4 +258,40 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message()).isEqualTo("Missing required header: Idempotency-Key");
         assertThat(response.getBody().timestamp()).isNotNull();
     }
+
+    @Test
+    @DisplayName("handleCheckoutConflict should return 409 CONFLICT with ErrorResponse")
+    void handleCheckoutConflict_ShouldReturn409() {
+        // Arrange
+        CheckoutConflictException ex = new CheckoutConflictException();
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleCheckoutConflict(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(409);
+        assertThat(response.getBody().error()).isEqualTo("Conflict");
+        assertThat(response.getBody().message()).isEqualTo(ex.getMessage());
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("handleIllegalArgument should return 400 BAD_REQUEST with ErrorResponse")
+    void handleIllegalArgument_ShouldReturn400() {
+        // Arrange
+        IllegalArgumentException ex = new IllegalArgumentException("Idempotency-Key must not be blank");
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleIllegalArgument(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(400);
+        assertThat(response.getBody().error()).isEqualTo("Bad Request");
+        assertThat(response.getBody().message()).isEqualTo("Idempotency-Key must not be blank");
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
 }
