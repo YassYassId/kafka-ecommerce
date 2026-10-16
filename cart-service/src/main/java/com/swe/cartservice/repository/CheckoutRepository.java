@@ -1,5 +1,7 @@
 package com.swe.cartservice.repository;
 
+import com.swe.cartservice.model.CheckoutClaim;
+import com.swe.cartservice.model.CheckoutClaimResult;
 import com.swe.cartservice.model.CheckoutRecord;
 
 import java.util.Optional;
@@ -9,9 +11,11 @@ public interface CheckoutRepository {
 
     Optional<CheckoutRecord> findByCustomerIdAndKey(UUID customerId, String idempotencyKey);
 
-    boolean completeCheckout(CheckoutRecord record, String expectedCartVersion);
+    CheckoutClaimResult acquireCheckout(UUID customerId, String idempotencyKey, String expectedCartJson, String leaseToken);
 
-    boolean claimCheckout(UUID customerId, String idempotencyKey, String expectedCartJson);
+    Optional<CheckoutClaim> findClaim(UUID customerId);
 
-    boolean releaseClaim(UUID customerId, String idempotencyKey);
+    boolean releaseClaim(UUID customerId, String idempotencyKey, String leaseToken);
+
+    boolean completeCheckout(CheckoutRecord record, String expectedCartJson, String leaseToken);
 }

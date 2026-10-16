@@ -20,6 +20,8 @@ import com.swe.cartservice.exception.ProductNotFoundException;
 import com.swe.cartservice.metrics.CartMetrics;
 import com.swe.cartservice.model.Cart;
 import com.swe.cartservice.model.CartItem;
+import com.swe.cartservice.model.CheckoutClaim;
+import com.swe.cartservice.model.CheckoutClaimResult;
 import com.swe.cartservice.model.CheckoutRecord;
 import com.swe.cartservice.repository.CartRepository;
 import com.swe.cartservice.repository.CheckoutRepository;
@@ -32,6 +34,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -65,6 +68,9 @@ class CartServiceImplTest {
 
     @Mock
     private CheckoutRepository checkoutRepository;
+
+    @Mock
+    private ObjectMapper objectMapper;
 
     @InjectMocks
     private CartServiceImpl cartService;
@@ -440,7 +446,7 @@ class CartServiceImplTest {
     class CheckoutTests {
 
         @Test
-        @DisplayName("should successfully checkout valid cart, call order client, complete checkout, and return checkout response")
+        @DisplayName("should successfully checkout valid cart on fresh acquisition, call order client, complete checkout, and return checkout response")
         void shouldCheckoutSuccessfully() {
             // Arrange
             String idempotencyKey = UUID.randomUUID().toString();
@@ -465,14 +471,18 @@ class CartServiceImplTest {
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.claimCheckout(customerId, idempotencyKey, rawJson)).thenReturn(true);
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
+
             when(catalogClient.getProduct(productId1)).thenReturn(product1);
             when(catalogClient.getProduct(productId2)).thenReturn(product2);
 
             OrderResponse orderResponse = new OrderResponse(orderId, "PENDING");
             when(orderClient.createOrder(eq(idempotencyKey), any(CreateOrderRequest.class))).thenReturn(orderResponse);
-            when(checkoutRepository.completeCheckout(any(CheckoutRecord.class), eq(rawJson))).thenReturn(true);
+            when(checkoutRepository.completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class))).thenReturn(true);
 
             // Act
             CheckoutResponse response = cartService.checkout(customerId, idempotencyKey);
@@ -496,11 +506,53 @@ class CartServiceImplTest {
                     .containsExactly(2, 1);
 
             ArgumentCaptor<CheckoutRecord> recordCaptor = ArgumentCaptor.forClass(CheckoutRecord.class);
-            verify(checkoutRepository).completeCheckout(recordCaptor.capture(), eq(rawJson));
+            ArgumentCaptor<String> leaseTokenCaptor = ArgumentCaptor.forClass(String.class);
+            verify(checkoutRepository).completeCheckout(recordCaptor.capture(), eq(rawJson), leaseTokenCaptor.capture());
             assertThat(recordCaptor.getValue().customerId()).isEqualTo(customerId);
             assertThat(recordCaptor.getValue().idempotencyKey()).isEqualTo(idempotencyKey);
             assertThat(recordCaptor.getValue().orderId()).isEqualTo(orderId);
             assertThat(recordCaptor.getValue().status()).isEqualTo("PENDING");
+            assertThat(leaseTokenCaptor.getValue()).isNotBlank();
+        }
+
+        @Test
+        @DisplayName("should resume checkout when claim acquisition returns RESUMED")
+        void shouldResumeCheckoutSuccessfully() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            UUID orderId = UUID.randomUUID();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            Cart cart = new Cart(
+                    customerId,
+                    List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
+                    OffsetDateTime.now()
+            );
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId1, new BigDecimal("10.00"), "USD", ProductStatus.ACTIVE
+            );
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.RESUMED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
+            when(catalogClient.getProduct(productId1)).thenReturn(product);
+
+            OrderResponse orderResponse = new OrderResponse(orderId, "PENDING");
+            when(orderClient.createOrder(eq(idempotencyKey), any(CreateOrderRequest.class))).thenReturn(orderResponse);
+            when(checkoutRepository.completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class))).thenReturn(true);
+
+            // Act
+            CheckoutResponse response = cartService.checkout(customerId, idempotencyKey);
+
+            // Assert
+            assertThat(response).isNotNull();
+            assertThat(response.orderId()).isEqualTo(orderId);
+            assertThat(response.status()).isEqualTo("PENDING");
+            verify(checkoutRepository).completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class));
         }
 
         @Test
@@ -525,7 +577,8 @@ class CartServiceImplTest {
             verifyNoInteractions(cartRepository);
             verifyNoInteractions(catalogClient);
             verifyNoInteractions(orderClient);
-            verify(checkoutRepository, never()).claimCheckout(any(), any(), any());
+            verifyNoInteractions(objectMapper);
+            verify(checkoutRepository, never()).acquireCheckout(any(), any(), any(), any());
         }
 
         @Test
@@ -544,12 +597,14 @@ class CartServiceImplTest {
         }
 
         @Test
-        @DisplayName("should throw CartNotFoundException when raw cart does not exist")
+        @DisplayName("should throw CartNotFoundException when raw cart does not exist and claim returns CART_CHANGED")
         void shouldThrowCartNotFoundExceptionWhenCartDoesNotExist() {
             // Arrange
             String idempotencyKey = UUID.randomUUID().toString();
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(""), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.CART_CHANGED);
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
@@ -558,19 +613,20 @@ class CartServiceImplTest {
 
             verifyNoInteractions(catalogClient);
             verifyNoInteractions(orderClient);
-            verify(checkoutRepository, never()).claimCheckout(any(), any(), any());
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
         }
 
         @Test
-        @DisplayName("should throw CheckoutConflictException when claim fails")
-        void shouldThrowCheckoutConflictExceptionWhenClaimFails() {
+        @DisplayName("should throw CheckoutConflictException when cart changed and current cart is present")
+        void shouldThrowCheckoutConflictExceptionWhenCartChangedAndNotEmpty() {
             // Arrange
             String idempotencyKey = UUID.randomUUID().toString();
             String rawJson = "{\"customerId\":\"" + customerId + "\"}";
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.claimCheckout(customerId, idempotencyKey, rawJson)).thenReturn(false);
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.CART_CHANGED);
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
@@ -581,7 +637,117 @@ class CartServiceImplTest {
         }
 
         @Test
-        @DisplayName("should throw EmptyCartException and release claim when cart items list is empty")
+        @DisplayName("should throw CheckoutConflictException when claim acquisition returns BUSY")
+        void shouldThrowCheckoutConflictExceptionWhenClaimReturnsBusy() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.BUSY);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            verifyNoInteractions(catalogClient);
+            verifyNoInteractions(orderClient);
+        }
+
+        @Test
+        @DisplayName("should throw CheckoutConflictException when claim acquisition returns CONFLICT")
+        void shouldThrowCheckoutConflictExceptionWhenClaimReturnsConflict() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.CONFLICT);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            verifyNoInteractions(catalogClient);
+            verifyNoInteractions(orderClient);
+        }
+
+        @Test
+        @DisplayName("should throw IllegalStateException when checkout claim disappears after acquisition")
+        void shouldThrowIllegalStateExceptionWhenClaimDisappearsAfterAcquisition() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId)).thenReturn(Optional.empty());
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage("Checkout claim disappeared after acquisition");
+
+            verifyNoInteractions(orderClient);
+        }
+
+        @Test
+        @DisplayName("should throw CheckoutConflictException when claim idempotency key does not match request")
+        void shouldThrowCheckoutConflictExceptionWhenClaimIdempotencyKeyMismatches() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim("different-key", rawJson)));
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            verifyNoInteractions(orderClient);
+        }
+
+        @Test
+        @DisplayName("should throw CheckoutConflictException when reconstructed cart customerId does not match request")
+        void shouldThrowCheckoutConflictExceptionWhenCartCustomerIdMismatches() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            UUID differentCustomer = UUID.randomUUID();
+            Cart cart = new Cart(
+                    differentCustomer,
+                    List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
+                    OffsetDateTime.now()
+            );
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            verifyNoInteractions(orderClient);
+        }
+
+        @Test
+        @DisplayName("should throw EmptyCartException and release claim when cart items list is empty on ACQUIRED")
         void shouldThrowEmptyCartExceptionWhenCartIsEmpty() {
             // Arrange
             String idempotencyKey = UUID.randomUUID().toString();
@@ -590,15 +756,44 @@ class CartServiceImplTest {
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.claimCheckout(customerId, idempotencyKey, rawJson)).thenReturn(true);
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(emptyCart));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(emptyCart);
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
                     .isInstanceOf(EmptyCartException.class)
                     .hasMessageContaining(customerId.toString());
 
-            verify(checkoutRepository).releaseClaim(customerId, idempotencyKey);
+            verify(checkoutRepository).releaseClaim(eq(customerId), eq(idempotencyKey), any(String.class));
+            verifyNoInteractions(catalogClient);
+            verifyNoInteractions(orderClient);
+        }
+
+        @Test
+        @DisplayName("should throw EmptyCartException and NOT release claim when cart items list is empty on RESUMED")
+        void shouldThrowEmptyCartExceptionAndNotReleaseClaimOnResumed() {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            Cart emptyCart = new Cart(customerId, List.of(), OffsetDateTime.now());
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.RESUMED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(emptyCart);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(EmptyCartException.class)
+                    .hasMessageContaining(customerId.toString());
+
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
             verifyNoInteractions(catalogClient);
             verifyNoInteractions(orderClient);
         }
@@ -620,8 +815,11 @@ class CartServiceImplTest {
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.claimCheckout(customerId, idempotencyKey, rawJson)).thenReturn(true);
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
             when(catalogClient.getProduct(productId1)).thenReturn(product);
 
             // Act & Assert
@@ -629,7 +827,7 @@ class CartServiceImplTest {
                     .isInstanceOf(ProductNotAvailableException.class)
                     .hasMessageContaining(productId1.toString());
 
-            verify(checkoutRepository).releaseClaim(customerId, idempotencyKey);
+            verify(checkoutRepository).releaseClaim(eq(customerId), eq(idempotencyKey), any(String.class));
             verifyNoInteractions(orderClient);
         }
 
@@ -647,15 +845,18 @@ class CartServiceImplTest {
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.claimCheckout(customerId, idempotencyKey, rawJson)).thenReturn(true);
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
             when(catalogClient.getProduct(productId1)).thenThrow(new ProductNotFoundException(productId1));
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
                     .isInstanceOf(ProductNotFoundException.class);
 
-            verify(checkoutRepository).releaseClaim(customerId, idempotencyKey);
+            verify(checkoutRepository).releaseClaim(eq(customerId), eq(idempotencyKey), any(String.class));
             verifyNoInteractions(orderClient);
         }
 
@@ -673,15 +874,18 @@ class CartServiceImplTest {
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.claimCheckout(customerId, idempotencyKey, rawJson)).thenReturn(true);
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
             when(catalogClient.getProduct(productId1)).thenThrow(new CatalogUnavailableException());
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
                     .isInstanceOf(CatalogUnavailableException.class);
 
-            verify(checkoutRepository).releaseClaim(customerId, idempotencyKey);
+            verify(checkoutRepository).releaseClaim(eq(customerId), eq(idempotencyKey), any(String.class));
             verifyNoInteractions(orderClient);
         }
 
@@ -702,8 +906,11 @@ class CartServiceImplTest {
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.claimCheckout(customerId, idempotencyKey, rawJson)).thenReturn(true);
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
             when(catalogClient.getProduct(productId1)).thenReturn(product);
             when(orderClient.createOrder(eq(idempotencyKey), any(CreateOrderRequest.class)))
                     .thenThrow(new OrderServiceUnavailableException());
@@ -712,8 +919,8 @@ class CartServiceImplTest {
             assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
                     .isInstanceOf(OrderServiceUnavailableException.class);
 
-            verify(checkoutRepository, never()).releaseClaim(customerId, idempotencyKey);
-            verify(checkoutRepository, never()).completeCheckout(any(), any());
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
+            verify(checkoutRepository, never()).completeCheckout(any(), any(), any());
         }
 
         @Test
@@ -735,17 +942,22 @@ class CartServiceImplTest {
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.claimCheckout(customerId, idempotencyKey, rawJson)).thenReturn(true);
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(cart));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.ACQUIRED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
             when(catalogClient.getProduct(productId1)).thenReturn(product);
 
             OrderResponse orderResponse = new OrderResponse(orderId, "PENDING");
             when(orderClient.createOrder(eq(idempotencyKey), any(CreateOrderRequest.class))).thenReturn(orderResponse);
-            when(checkoutRepository.completeCheckout(any(CheckoutRecord.class), eq(rawJson))).thenReturn(false);
+            when(checkoutRepository.completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class))).thenReturn(false);
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
                     .isInstanceOf(CheckoutConflictException.class);
+
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
         }
     }
 }
