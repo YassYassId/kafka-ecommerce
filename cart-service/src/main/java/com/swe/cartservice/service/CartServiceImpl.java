@@ -46,14 +46,15 @@ public class CartServiceImpl implements CartService {
     @Override
     public Cart addItem(UUID customerId, AddCartItemRequest request) {
 
-        CatalogProductResponse product =
-                catalogClient.getProduct(request.productId());
+        CatalogProductResponse product = catalogClient.getProduct(request.productId());
 
         if (product.status() != ProductStatus.ACTIVE) {
             throw new ProductNotAvailableException(request.productId());
         }
 
-        Cart existingCart = getCart(customerId);
+        String expectedCartJson = cartRepository.findRawCartByCustomerId(customerId).orElse("");
+
+        Cart existingCart = expectedCartJson.isEmpty() ? emptyCart(customerId) : objectMapper.readValue(expectedCartJson, Cart.class);
 
         var items = new ArrayList<>(existingCart.items());
 
@@ -76,7 +77,7 @@ public class CartServiceImpl implements CartService {
 
         Cart updatedCart = new Cart(customerId, List.copyOf(items), OffsetDateTime.now());
 
-        cartRepository.save(updatedCart);
+        requireSuccessfulMutation(cartRepository.saveIfUnchanged(updatedCart, expectedCartJson));
         cartMetrics.itemAdded();
 
         return updatedCart;
@@ -84,8 +85,10 @@ public class CartServiceImpl implements CartService {
 
     @Override
     public Cart updateItemQuantity(UUID customerId, UUID productId, int quantity) {
-        Cart cart = cartRepository.findByCustomerId(customerId)
+        String expectedCartJson = cartRepository.findRawCartByCustomerId(customerId)
                 .orElseThrow(() -> new CartNotFoundException(customerId));
+
+        Cart cart = objectMapper.readValue(expectedCartJson, Cart.class);
 
         List<CartItem> items = new ArrayList<>(cart.items());
 
@@ -106,7 +109,7 @@ public class CartServiceImpl implements CartService {
 
         Cart updatedCart = new Cart(customerId, List.copyOf(items), OffsetDateTime.now());
 
-        cartRepository.save(updatedCart);
+        requireSuccessfulMutation(cartRepository.saveIfUnchanged(updatedCart, expectedCartJson));
         cartMetrics.itemUpdated();
 
         return updatedCart;
@@ -114,8 +117,10 @@ public class CartServiceImpl implements CartService {
 
     @Override
     public Cart removeItem(UUID customerId, UUID productId) {
-        Cart cart = cartRepository.findByCustomerId(customerId)
+        String expectedCartJson = cartRepository.findRawCartByCustomerId(customerId)
                 .orElseThrow(() -> new CartNotFoundException(customerId));
+
+        Cart cart = objectMapper.readValue(expectedCartJson, Cart.class);
 
         List<CartItem> items = new ArrayList<>(cart.items());
 
@@ -125,23 +130,29 @@ public class CartServiceImpl implements CartService {
             throw new CartItemNotFoundException(productId);
         }
 
-        cartMetrics.itemRemoved();
-
         if (items.isEmpty()) {
-            cartRepository.deleteByCustomerId(customerId);
+            requireSuccessfulMutation(cartRepository.deleteIfUnchanged(customerId, expectedCartJson));
+
+            cartMetrics.itemRemoved();
             return emptyCart(customerId);
         }
 
         Cart updatedCart = new Cart(customerId, List.copyOf(items), OffsetDateTime.now());
 
-        cartRepository.save(updatedCart);
+        requireSuccessfulMutation(cartRepository.saveIfUnchanged(updatedCart, expectedCartJson));
+        cartMetrics.itemRemoved();
 
         return updatedCart;
     }
 
+
     @Override
     public void clearCart(UUID customerId) {
-        cartRepository.deleteByCustomerId(customerId);
+
+        String expectedCartJson = cartRepository.findRawCartByCustomerId(customerId).orElse("");
+
+        requireSuccessfulMutation(cartRepository.deleteIfUnchanged(customerId, expectedCartJson));
+
         cartMetrics.cartCleared();
     }
 
@@ -269,4 +280,18 @@ public class CartServiceImpl implements CartService {
     private Cart emptyCart(UUID customerId) {
         return new Cart(customerId, List.of(), OffsetDateTime.now());
     }
+
+
+    private void requireSuccessfulMutation(CartMutationResult result) {
+        switch (result) {
+            case SUCCESS -> {
+                // Mutation completed.
+            }
+            case CHECKOUT_IN_PROGRESS ->
+                    throw new CheckoutConflictException();
+            case STALE_CART ->
+                    throw new CartConcurrentModificationException();
+        }
+    }
+
 }

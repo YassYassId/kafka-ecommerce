@@ -29,4 +29,14 @@ public class CheckoutRedisConfig {
     public DefaultRedisScript<Long> releaseCheckoutClaimScript() {
         return loadScript("redis/release-checkout-claim.lua");
     }
+
+    @Bean
+    public DefaultRedisScript<Long> mutateCartScript() {
+        return loadScript("redis/mutate-cart.lua");
+    }
+
+    @Bean
+    public DefaultRedisScript<Long> deleteCartScript() {
+        return loadScript("redis/delete-cart.lua");
+    }
 }

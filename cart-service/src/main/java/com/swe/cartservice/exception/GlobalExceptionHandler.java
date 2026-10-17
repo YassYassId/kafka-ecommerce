@@ -192,4 +192,14 @@ public class GlobalExceptionHandler {
                 .body(new ErrorResponse(OffsetDateTime.now(),
                         HttpStatus.BAD_REQUEST.value(), HttpStatus.BAD_REQUEST.getReasonPhrase(), ex.getMessage()));
     }
+
+
+    @ExceptionHandler(CartConcurrentModificationException.class)
+    public ResponseEntity<ErrorResponse> handleCartConcurrentModification(CartConcurrentModificationException ex) {
+
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse(OffsetDateTime.now(), HttpStatus.CONFLICT.value(),
+                        HttpStatus.CONFLICT.getReasonPhrase(), ex.getMessage()));
+    }
+
 }
