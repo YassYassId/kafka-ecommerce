@@ -40,4 +40,26 @@ class CheckoutRedisConfigTest {
         assertThat(script.getResultType()).isEqualTo(Long.class);
         assertThat(script.getScriptAsString()).contains("KEYS[1]");
     }
+
+    @Test
+    @DisplayName("mutateCartScript should configure RedisScript with Long result type and load script content")
+    void mutateCartScript_ShouldConfigureScriptProperly() {
+        DefaultRedisScript<Long> script = config.mutateCartScript();
+
+        assertThat(script).isNotNull();
+        assertThat(script.getResultType()).isEqualTo(Long.class);
+        assertThat(script.getScriptAsString()).contains("KEYS[1]");
+        assertThat(script.getScriptAsString()).contains("KEYS[2]");
+    }
+
+    @Test
+    @DisplayName("deleteCartScript should configure RedisScript with Long result type and load script content")
+    void deleteCartScript_ShouldConfigureScriptProperly() {
+        DefaultRedisScript<Long> script = config.deleteCartScript();
+
+        assertThat(script).isNotNull();
+        assertThat(script.getResultType()).isEqualTo(Long.class);
+        assertThat(script.getScriptAsString()).contains("KEYS[1]");
+        assertThat(script.getScriptAsString()).contains("KEYS[2]");
+    }
 }

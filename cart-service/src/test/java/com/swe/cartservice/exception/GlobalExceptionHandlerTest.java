@@ -294,4 +294,22 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().message()).isEqualTo("Idempotency-Key must not be blank");
         assertThat(response.getBody().timestamp()).isNotNull();
     }
+
+    @Test
+    @DisplayName("handleCartConcurrentModification should return 409 CONFLICT with ErrorResponse")
+    void handleCartConcurrentModification_ShouldReturn409() {
+        // Arrange
+        CartConcurrentModificationException ex = new CartConcurrentModificationException();
+
+        // Act
+        ResponseEntity<GlobalExceptionHandler.ErrorResponse> response = exceptionHandler.handleCartConcurrentModification(ex);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(409);
+        assertThat(response.getBody().error()).isEqualTo("Conflict");
+        assertThat(response.getBody().message()).isEqualTo("Cart was modified concurrently. Please retry.");
+        assertThat(response.getBody().timestamp()).isNotNull();
+    }
 }

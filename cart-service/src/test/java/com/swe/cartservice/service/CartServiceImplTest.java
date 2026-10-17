@@ -9,6 +9,7 @@ import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.dto.CatalogProductResponse;
 import com.swe.cartservice.dto.CheckoutResponse;
 import com.swe.cartservice.dto.ProductStatus;
+import com.swe.cartservice.exception.CartConcurrentModificationException;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
 import com.swe.cartservice.exception.CatalogUnavailableException;
@@ -20,6 +21,7 @@ import com.swe.cartservice.exception.ProductNotFoundException;
 import com.swe.cartservice.metrics.CartMetrics;
 import com.swe.cartservice.model.Cart;
 import com.swe.cartservice.model.CartItem;
+import com.swe.cartservice.model.CartMutationResult;
 import com.swe.cartservice.model.CheckoutClaim;
 import com.swe.cartservice.model.CheckoutClaimResult;
 import com.swe.cartservice.model.CheckoutRecord;
@@ -142,7 +144,8 @@ class CartServiceImplTest {
                     productId1, new BigDecimal("49.99"), "USD", ProductStatus.ACTIVE
             );
             when(catalogClient.getProduct(productId1)).thenReturn(product);
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(""))).thenReturn(CartMutationResult.SUCCESS);
             AddCartItemRequest request = new AddCartItemRequest(productId1, 3);
 
             // Act
@@ -156,7 +159,7 @@ class CartServiceImplTest {
             assertThat(result.items().get(0).price()).isEqualByComparingTo("49.99");
 
             ArgumentCaptor<Cart> cartCaptor = ArgumentCaptor.forClass(Cart.class);
-            verify(cartRepository).save(cartCaptor.capture());
+            verify(cartRepository).saveIfUnchanged(cartCaptor.capture(), eq(""));
             assertThat(cartCaptor.getValue().items()).hasSize(1);
             assertThat(cartCaptor.getValue().items().get(0).productId()).isEqualTo(productId1);
             verify(cartMetrics).itemAdded();
@@ -175,7 +178,10 @@ class CartServiceImplTest {
                     List.of(new CartItem(productId1, 2, new BigDecimal("40.00"))),
                     OffsetDateTime.now().minusHours(1)
             );
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(rawJson))).thenReturn(CartMutationResult.SUCCESS);
             AddCartItemRequest request = new AddCartItemRequest(productId1, 3);
 
             // Act
@@ -187,7 +193,7 @@ class CartServiceImplTest {
             assertThat(result.items().get(0).quantity()).isEqualTo(5); // 2 + 3
             assertThat(result.items().get(0).price()).isEqualByComparingTo("45.00");
 
-            verify(cartRepository).save(any(Cart.class));
+            verify(cartRepository).saveIfUnchanged(any(Cart.class), eq(rawJson));
             verify(cartMetrics).itemAdded();
         }
 
@@ -204,7 +210,10 @@ class CartServiceImplTest {
                     List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
                     OffsetDateTime.now()
             );
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(rawJson))).thenReturn(CartMutationResult.SUCCESS);
             AddCartItemRequest request = new AddCartItemRequest(productId2, 4);
 
             // Act
@@ -213,7 +222,7 @@ class CartServiceImplTest {
             // Assert
             assertThat(result.items()).hasSize(2);
             assertThat(result.items()).extracting(CartItem::productId).containsExactlyInAnyOrder(productId1, productId2);
-            verify(cartRepository).save(any(Cart.class));
+            verify(cartRepository).saveIfUnchanged(any(Cart.class), eq(rawJson));
             verify(cartMetrics).itemAdded();
         }
 
@@ -232,7 +241,7 @@ class CartServiceImplTest {
                     .isInstanceOf(ProductNotAvailableException.class)
                     .hasMessageContaining(productId1.toString());
 
-            verify(cartRepository, never()).save(any());
+            verify(cartRepository, never()).saveIfUnchanged(any(), any());
             verifyNoInteractions(cartMetrics);
         }
 
@@ -249,7 +258,7 @@ class CartServiceImplTest {
                     .isInstanceOf(ProductNotFoundException.class)
                     .hasMessageContaining(productId1.toString());
 
-            verify(cartRepository, never()).save(any());
+            verify(cartRepository, never()).saveIfUnchanged(any(), any());
             verifyNoInteractions(cartMetrics);
         }
 
@@ -265,8 +274,46 @@ class CartServiceImplTest {
             assertThatThrownBy(() -> cartService.addItem(customerId, request))
                     .isInstanceOf(CatalogUnavailableException.class);
 
-            verify(cartRepository, never()).save(any());
+            verify(cartRepository, never()).saveIfUnchanged(any(), any());
             verifyNoInteractions(cartMetrics);
+        }
+
+        @Test
+        @DisplayName("should throw CheckoutConflictException when checkout is in progress on addItem")
+        void shouldThrowCheckoutConflictExceptionWhenCheckoutInProgress() {
+            // Arrange
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId1, new BigDecimal("49.99"), "USD", ProductStatus.ACTIVE
+            );
+            when(catalogClient.getProduct(productId1)).thenReturn(product);
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(""))).thenReturn(CartMutationResult.CHECKOUT_IN_PROGRESS);
+            AddCartItemRequest request = new AddCartItemRequest(productId1, 3);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.addItem(customerId, request))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            verify(cartMetrics, never()).itemAdded();
+        }
+
+        @Test
+        @DisplayName("should throw CartConcurrentModificationException when cart was concurrently modified on addItem")
+        void shouldThrowCartConcurrentModificationExceptionWhenStaleCart() {
+            // Arrange
+            CatalogProductResponse product = new CatalogProductResponse(
+                    productId1, new BigDecimal("49.99"), "USD", ProductStatus.ACTIVE
+            );
+            when(catalogClient.getProduct(productId1)).thenReturn(product);
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(""))).thenReturn(CartMutationResult.STALE_CART);
+            AddCartItemRequest request = new AddCartItemRequest(productId1, 3);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.addItem(customerId, request))
+                    .isInstanceOf(CartConcurrentModificationException.class);
+
+            verify(cartMetrics, never()).itemAdded();
         }
     }
 
@@ -286,7 +333,10 @@ class CartServiceImplTest {
                     ),
                     OffsetDateTime.now()
             );
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(rawJson))).thenReturn(CartMutationResult.SUCCESS);
 
             // Act
             Cart result = cartService.updateItemQuantity(customerId, productId1, 7);
@@ -300,7 +350,7 @@ class CartServiceImplTest {
             assertThat(updatedItem.quantity()).isEqualTo(7);
             assertThat(updatedItem.price()).isEqualByComparingTo("15.00");
 
-            verify(cartRepository).save(any(Cart.class));
+            verify(cartRepository).saveIfUnchanged(any(Cart.class), eq(rawJson));
             verify(cartMetrics).itemUpdated();
         }
 
@@ -308,14 +358,14 @@ class CartServiceImplTest {
         @DisplayName("should throw CartNotFoundException when cart does not exist and not record metric")
         void shouldThrowCartNotFoundExceptionWhenCartNotFound() {
             // Arrange
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.updateItemQuantity(customerId, productId1, 5))
                     .isInstanceOf(CartNotFoundException.class)
                     .hasMessageContaining(customerId.toString());
 
-            verify(cartRepository, never()).save(any());
+            verify(cartRepository, never()).saveIfUnchanged(any(), any());
             verifyNoInteractions(cartMetrics);
         }
 
@@ -328,15 +378,59 @@ class CartServiceImplTest {
                     List.of(new CartItem(productId1, 2, new BigDecimal("15.00"))),
                     OffsetDateTime.now()
             );
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.updateItemQuantity(customerId, productId2, 5))
                     .isInstanceOf(CartItemNotFoundException.class)
                     .hasMessageContaining(productId2.toString());
 
-            verify(cartRepository, never()).save(any());
+            verify(cartRepository, never()).saveIfUnchanged(any(), any());
             verifyNoInteractions(cartMetrics);
+        }
+
+        @Test
+        @DisplayName("should throw CheckoutConflictException when checkout is in progress on updateItemQuantity")
+        void shouldThrowCheckoutConflictExceptionWhenCheckoutInProgress() {
+            // Arrange
+            Cart existingCart = new Cart(
+                    customerId,
+                    List.of(new CartItem(productId1, 2, new BigDecimal("15.00"))),
+                    OffsetDateTime.now()
+            );
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(rawJson))).thenReturn(CartMutationResult.CHECKOUT_IN_PROGRESS);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.updateItemQuantity(customerId, productId1, 5))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            verify(cartMetrics, never()).itemUpdated();
+        }
+
+        @Test
+        @DisplayName("should throw CartConcurrentModificationException when cart was concurrently modified on updateItemQuantity")
+        void shouldThrowCartConcurrentModificationExceptionWhenStaleCart() {
+            // Arrange
+            Cart existingCart = new Cart(
+                    customerId,
+                    List.of(new CartItem(productId1, 2, new BigDecimal("15.00"))),
+                    OffsetDateTime.now()
+            );
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(rawJson))).thenReturn(CartMutationResult.STALE_CART);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.updateItemQuantity(customerId, productId1, 5))
+                    .isInstanceOf(CartConcurrentModificationException.class);
+
+            verify(cartMetrics, never()).itemUpdated();
         }
     }
 
@@ -356,7 +450,10 @@ class CartServiceImplTest {
                     ),
                     OffsetDateTime.now()
             );
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(rawJson))).thenReturn(CartMutationResult.SUCCESS);
 
             // Act
             Cart result = cartService.removeItem(customerId, productId1);
@@ -364,8 +461,8 @@ class CartServiceImplTest {
             // Assert
             assertThat(result.items()).hasSize(1);
             assertThat(result.items().get(0).productId()).isEqualTo(productId2);
-            verify(cartRepository).save(any(Cart.class));
-            verify(cartRepository, never()).deleteByCustomerId(any());
+            verify(cartRepository).saveIfUnchanged(any(Cart.class), eq(rawJson));
+            verify(cartRepository, never()).deleteIfUnchanged(any(), any());
             verify(cartMetrics).itemRemoved();
         }
 
@@ -378,7 +475,10 @@ class CartServiceImplTest {
                     List.of(new CartItem(productId1, 2, new BigDecimal("10.00"))),
                     OffsetDateTime.now()
             );
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.deleteIfUnchanged(customerId, rawJson)).thenReturn(CartMutationResult.SUCCESS);
 
             // Act
             Cart result = cartService.removeItem(customerId, productId1);
@@ -386,8 +486,8 @@ class CartServiceImplTest {
             // Assert
             assertThat(result.items()).isEmpty();
             assertThat(result.customerId()).isEqualTo(customerId);
-            verify(cartRepository).deleteByCustomerId(customerId);
-            verify(cartRepository, never()).save(any());
+            verify(cartRepository).deleteIfUnchanged(customerId, rawJson);
+            verify(cartRepository, never()).saveIfUnchanged(any(), any());
             verify(cartMetrics).itemRemoved();
         }
 
@@ -395,13 +495,13 @@ class CartServiceImplTest {
         @DisplayName("should throw CartNotFoundException when cart does not exist and not record metric")
         void shouldThrowCartNotFoundExceptionWhenCartNotFound() {
             // Arrange
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.removeItem(customerId, productId1))
                     .isInstanceOf(CartNotFoundException.class);
-            verify(cartRepository, never()).deleteByCustomerId(any());
-            verify(cartRepository, never()).save(any());
+            verify(cartRepository, never()).deleteIfUnchanged(any(), any());
+            verify(cartRepository, never()).saveIfUnchanged(any(), any());
             verifyNoInteractions(cartMetrics);
         }
 
@@ -414,14 +514,61 @@ class CartServiceImplTest {
                     List.of(new CartItem(productId1, 2, new BigDecimal("10.00"))),
                     OffsetDateTime.now()
             );
-            when(cartRepository.findByCustomerId(customerId)).thenReturn(Optional.of(existingCart));
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
 
             // Act & Assert
             assertThatThrownBy(() -> cartService.removeItem(customerId, productId2))
                     .isInstanceOf(CartItemNotFoundException.class);
-            verify(cartRepository, never()).deleteByCustomerId(any());
-            verify(cartRepository, never()).save(any());
+            verify(cartRepository, never()).deleteIfUnchanged(any(), any());
+            verify(cartRepository, never()).saveIfUnchanged(any(), any());
             verifyNoInteractions(cartMetrics);
+        }
+
+        @Test
+        @DisplayName("should throw CheckoutConflictException when checkout is in progress on removeItem")
+        void shouldThrowCheckoutConflictExceptionWhenCheckoutInProgress() {
+            // Arrange
+            Cart existingCart = new Cart(
+                    customerId,
+                    List.of(
+                            new CartItem(productId1, 2, new BigDecimal("10.00")),
+                            new CartItem(productId2, 1, new BigDecimal("20.00"))
+                    ),
+                    OffsetDateTime.now()
+            );
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.saveIfUnchanged(any(Cart.class), eq(rawJson))).thenReturn(CartMutationResult.CHECKOUT_IN_PROGRESS);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.removeItem(customerId, productId1))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            verify(cartMetrics, never()).itemRemoved();
+        }
+
+        @Test
+        @DisplayName("should throw CartConcurrentModificationException when cart was concurrently modified on removeItem")
+        void shouldThrowCartConcurrentModificationExceptionWhenStaleCart() {
+            // Arrange
+            Cart existingCart = new Cart(
+                    customerId,
+                    List.of(new CartItem(productId1, 2, new BigDecimal("10.00"))),
+                    OffsetDateTime.now()
+            );
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(existingCart);
+            when(cartRepository.deleteIfUnchanged(customerId, rawJson)).thenReturn(CartMutationResult.STALE_CART);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.removeItem(customerId, productId1))
+                    .isInstanceOf(CartConcurrentModificationException.class);
+
+            verify(cartMetrics, never()).itemRemoved();
         }
     }
 
@@ -430,14 +577,62 @@ class CartServiceImplTest {
     class ClearCartTests {
 
         @Test
-        @DisplayName("should delete cart from repository by customer ID and record metric")
-        void shouldDeleteCartFromRepository() {
+        @DisplayName("should delete cart from repository by customer ID when cart exists and record metric")
+        void shouldDeleteCartFromRepositoryWhenCartExists() {
+            // Arrange
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(cartRepository.deleteIfUnchanged(customerId, rawJson)).thenReturn(CartMutationResult.SUCCESS);
+
             // Act
             cartService.clearCart(customerId);
 
             // Assert
-            verify(cartRepository).deleteByCustomerId(customerId);
+            verify(cartRepository).deleteIfUnchanged(customerId, rawJson);
             verify(cartMetrics).cartCleared();
+        }
+
+        @Test
+        @DisplayName("should delete cart from repository when cart does not exist in Redis and record metric")
+        void shouldDeleteCartFromRepositoryWhenCartDoesNotExist() {
+            // Arrange
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.deleteIfUnchanged(customerId, "")).thenReturn(CartMutationResult.SUCCESS);
+
+            // Act
+            cartService.clearCart(customerId);
+
+            // Assert
+            verify(cartRepository).deleteIfUnchanged(customerId, "");
+            verify(cartMetrics).cartCleared();
+        }
+
+        @Test
+        @DisplayName("should throw CheckoutConflictException when checkout is in progress on clearCart")
+        void shouldThrowCheckoutConflictExceptionWhenCheckoutInProgress() {
+            // Arrange
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.deleteIfUnchanged(customerId, "")).thenReturn(CartMutationResult.CHECKOUT_IN_PROGRESS);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.clearCart(customerId))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            verify(cartMetrics, never()).cartCleared();
+        }
+
+        @Test
+        @DisplayName("should throw CartConcurrentModificationException when cart was concurrently modified on clearCart")
+        void shouldThrowCartConcurrentModificationExceptionWhenStaleCart() {
+            // Arrange
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.empty());
+            when(cartRepository.deleteIfUnchanged(customerId, "")).thenReturn(CartMutationResult.STALE_CART);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.clearCart(customerId))
+                    .isInstanceOf(CartConcurrentModificationException.class);
+
+            verify(cartMetrics, never()).cartCleared();
         }
     }
 

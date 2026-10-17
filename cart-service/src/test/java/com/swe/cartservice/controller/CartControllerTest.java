@@ -3,6 +3,7 @@ package com.swe.cartservice.controller;
 import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.dto.CheckoutResponse;
 import com.swe.cartservice.dto.UpdateCartItemRequest;
+import com.swe.cartservice.exception.CartConcurrentModificationException;
 import com.swe.cartservice.exception.CartItemNotFoundException;
 import com.swe.cartservice.exception.CartNotFoundException;
 import com.swe.cartservice.exception.CatalogUnavailableException;
@@ -236,6 +237,26 @@ class CartControllerTest {
                     .andExpect(jsonPath("$.error").value("Service Unavailable"))
                     .andExpect(jsonPath("$.message").value("Catalog service is temporarily unavailable"));
         }
+
+        @Test
+        @DisplayName("should return 409 Conflict when concurrent modification occurs on addItem")
+        void shouldReturn409WhenConcurrentModificationOnAddItem() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            AddCartItemRequest request = new AddCartItemRequest(productId, 2);
+            when(cartService.addItem(eq(customerId), any(AddCartItemRequest.class)))
+                    .thenThrow(new CartConcurrentModificationException());
+
+            // Act & Assert
+            mockMvc.perform(post(BASE_URL + "/{customerId}/items", customerId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Cart was modified concurrently. Please retry."));
+        }
     }
 
     @Nested
@@ -320,6 +341,26 @@ class CartControllerTest {
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.message").value("Product not found in cart: " + productId));
         }
+
+        @Test
+        @DisplayName("should return 409 Conflict when concurrent modification occurs on updateItemQuantity")
+        void shouldReturn409WhenConcurrentModificationOnUpdateItem() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            UpdateCartItemRequest request = new UpdateCartItemRequest(2);
+            when(cartService.updateItemQuantity(customerId, productId, 2))
+                    .thenThrow(new CartConcurrentModificationException());
+
+            // Act & Assert
+            mockMvc.perform(patch(BASE_URL + "/{customerId}/items/{productId}", customerId, productId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Cart was modified concurrently. Please retry."));
+        }
     }
 
     @Nested
@@ -357,6 +398,23 @@ class CartControllerTest {
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.message").value("Product not found in cart: " + productId));
         }
+
+        @Test
+        @DisplayName("should return 409 Conflict when concurrent modification occurs on removeItem")
+        void shouldReturn409WhenConcurrentModificationOnRemoveItem() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            when(cartService.removeItem(customerId, productId))
+                    .thenThrow(new CartConcurrentModificationException());
+
+            // Act & Assert
+            mockMvc.perform(delete(BASE_URL + "/{customerId}/items/{productId}", customerId, productId))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Cart was modified concurrently. Please retry."));
+        }
     }
 
     @Nested
@@ -375,6 +433,21 @@ class CartControllerTest {
                     .andExpect(status().isNoContent());
 
             verify(cartService).clearCart(customerId);
+        }
+
+        @Test
+        @DisplayName("should return 409 Conflict when concurrent modification occurs on clearCart")
+        void shouldReturn409WhenConcurrentModificationOnClearCart() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            doThrow(new CartConcurrentModificationException()).when(cartService).clearCart(customerId);
+
+            // Act & Assert
+            mockMvc.perform(delete(BASE_URL + "/{customerId}", customerId))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Cart was modified concurrently. Please retry."));
         }
     }
 
