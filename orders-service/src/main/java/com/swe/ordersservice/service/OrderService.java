@@ -16,4 +16,6 @@ public interface OrderService {
     void confirmOrder(InventoryReservedEvent event);
 
     void cancelOrder(InventoryRejectedEvent event);
+
+    OrderResponse findByIdempotencyKey(UUID customerId, String idempotencyKey, OrderRequest request);
 }

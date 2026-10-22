@@ -326,4 +326,160 @@ class OrderControllerTest {
             verifyNoInteractions(orderService);
         }
     }
+
+    @Nested
+    @DisplayName("POST /api/v1/orders/checkout-reconciliation")
+    class ReconcileCheckoutApiTests {
+
+        private static final String RECONCILIATION_URL = ORDERS_URL + "/checkout-reconciliation";
+
+        @Test
+        @DisplayName("should return 200 OK and order response when request is valid and order exists")
+        void reconcileCheckout_WhenValidRequestAndOrderExists_ShouldReturn200Ok() throws Exception {
+            // Arrange
+            UUID customerId = UUID.randomUUID();
+            UUID productId = UUID.randomUUID();
+            UUID existingOrderId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(productId, 2))
+            );
+
+            OrderResponse mockResponse = new OrderResponse(existingOrderId, OrderStatus.PENDING);
+            when(orderService.findByIdempotencyKey(eq(customerId), eq(idempotencyKey), any(OrderRequest.class)))
+                    .thenReturn(mockResponse);
+
+            // Act & Assert
+            mockMvc.perform(post(RECONCILIATION_URL)
+                            .header("Idempotency-Key", idempotencyKey)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orderId").value(existingOrderId.toString()))
+                    .andExpect(jsonPath("$.status").value("PENDING"));
+
+            verify(orderService).findByIdempotencyKey(eq(customerId), eq(idempotencyKey), any(OrderRequest.class));
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when Idempotency-Key header is missing")
+        void reconcileCheckout_WhenIdempotencyKeyHeaderMissing_ShouldReturn400BadRequest() throws Exception {
+            UUID customerId = UUID.randomUUID();
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(UUID.randomUUID(), 2))
+            );
+
+            mockMvc.perform(post(RECONCILIATION_URL)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value("Missing required header: Idempotency-Key"));
+
+            verifyNoInteractions(orderService);
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when service throws InvalidIdempotencyKeyException")
+        void reconcileCheckout_WhenIdempotencyKeyIsBlank_ShouldReturn400BadRequest() throws Exception {
+            UUID customerId = UUID.randomUUID();
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(UUID.randomUUID(), 2))
+            );
+
+            when(orderService.findByIdempotencyKey(eq(customerId), eq("   "), any(OrderRequest.class)))
+                    .thenThrow(new InvalidIdempotencyKeyException());
+
+            mockMvc.perform(post(RECONCILIATION_URL)
+                            .header("Idempotency-Key", "   ")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value("Idempotency-Key must not be blank"));
+
+            verify(orderService).findByIdempotencyKey(eq(customerId), eq("   "), any(OrderRequest.class));
+        }
+
+        @Test
+        @DisplayName("should return 400 Bad Request when customerId is missing in body")
+        void reconcileCheckout_WhenCustomerIdIsNull_ShouldReturn400BadRequest() throws Exception {
+            String idempotencyKey = UUID.randomUUID().toString();
+            String invalidJson = """
+                    {
+                        "customerId": null,
+                        "items": [
+                            {"productId": "00000000-0000-0000-0000-000000000001", "quantity": 1}
+                        ]
+                    }
+                    """;
+
+            mockMvc.perform(post(RECONCILIATION_URL)
+                            .header("Idempotency-Key", idempotencyKey)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(invalidJson))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.status").value(400))
+                    .andExpect(jsonPath("$.error").value("Bad Request"))
+                    .andExpect(jsonPath("$.message").value("Validation failed for one or more fields"));
+
+            verifyNoInteractions(orderService);
+        }
+
+        @Test
+        @DisplayName("should return 404 Not Found when order is not found")
+        void reconcileCheckout_WhenOrderNotFound_ShouldReturn404NotFound() throws Exception {
+            UUID customerId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(UUID.randomUUID(), 2))
+            );
+
+            when(orderService.findByIdempotencyKey(eq(customerId), eq(idempotencyKey), any(OrderRequest.class)))
+                    .thenThrow(new OrderNotFoundException("No Order found for this checkout"));
+
+            mockMvc.perform(post(RECONCILIATION_URL)
+                            .header("Idempotency-Key", idempotencyKey)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.status").value(404))
+                    .andExpect(jsonPath("$.error").value("Not Found"))
+                    .andExpect(jsonPath("$.message").value("No Order found for this checkout"));
+
+            verify(orderService).findByIdempotencyKey(eq(customerId), eq(idempotencyKey), any(OrderRequest.class));
+        }
+
+        @Test
+        @DisplayName("should return 409 Conflict when idempotency conflict occurs")
+        void reconcileCheckout_WhenIdempotencyConflict_ShouldReturn409Conflict() throws Exception {
+            UUID customerId = UUID.randomUUID();
+            String idempotencyKey = UUID.randomUUID().toString();
+            OrderRequest request = new OrderRequest(
+                    customerId,
+                    List.of(new OrderItemRequest(UUID.randomUUID(), 2))
+            );
+
+            when(orderService.findByIdempotencyKey(eq(customerId), eq(idempotencyKey), any(OrderRequest.class)))
+                    .thenThrow(new IdempotencyConflictException("Idempotency key was already used with different Order items"));
+
+            mockMvc.perform(post(RECONCILIATION_URL)
+                            .header("Idempotency-Key", idempotencyKey)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(request)))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.status").value(409))
+                    .andExpect(jsonPath("$.error").value("Conflict"))
+                    .andExpect(jsonPath("$.message").value("Idempotency key was already used with different Order items"));
+
+            verify(orderService).findByIdempotencyKey(eq(customerId), eq(idempotencyKey), any(OrderRequest.class));
+        }
+    }
 }

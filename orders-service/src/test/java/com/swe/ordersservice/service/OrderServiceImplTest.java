@@ -9,6 +9,7 @@ import com.swe.ordersservice.entity.OrderStatus;
 import com.swe.ordersservice.entity.ProcessedEvent;
 import com.swe.ordersservice.event.InventoryRejectedEvent;
 import com.swe.ordersservice.event.InventoryReservedEvent;
+import com.swe.ordersservice.exception.IdempotencyConflictException;
 import com.swe.ordersservice.exception.InvalidIdempotencyKeyException;
 import com.swe.ordersservice.exception.OrderNotFoundException;
 import com.swe.ordersservice.metrics.AfterCommitExecutor;
@@ -581,6 +582,135 @@ class OrderServiceImplTest {
 
             verify(processedEventRepository, never()).save(any());
             verifyNoInteractions(orderMetrics);
+        }
+    }
+
+    @Nested
+    @DisplayName("findByIdempotencyKey")
+    class FindByIdempotencyKeyTests {
+
+        private UUID customerId;
+        private UUID productId;
+        private String idempotencyKey;
+        private OrderRequest validRequest;
+
+        @BeforeEach
+        void setUp() {
+            customerId = UUID.randomUUID();
+            productId = UUID.randomUUID();
+            idempotencyKey = UUID.randomUUID().toString();
+            validRequest = new OrderRequest(customerId, List.of(new OrderItemRequest(productId, 2)));
+        }
+
+        @Test
+        @DisplayName("should return order response when matching order exists with matching items")
+        void shouldReturnOrderResponseWhenMatchingOrderExists() {
+            // Arrange
+            UUID orderId = UUID.randomUUID();
+            Order existingOrder = Order.builder()
+                    .id(orderId)
+                    .customerId(customerId)
+                    .status(OrderStatus.PENDING)
+                    .idempotencyKey(idempotencyKey)
+                    .items(List.of(OrderItem.builder().productId(productId).quantity(2).build()))
+                    .build();
+
+            when(orderRepository.findByIdempotencyKeyAndCustomerId(idempotencyKey, customerId))
+                    .thenReturn(Optional.of(existingOrder));
+
+            // Act
+            OrderResponse response = orderService.findByIdempotencyKey(customerId, idempotencyKey, validRequest);
+
+            // Assert
+            assertThat(response).isNotNull();
+            assertThat(response.orderId()).isEqualTo(orderId);
+            assertThat(response.status()).isEqualTo(OrderStatus.PENDING);
+            verify(orderRepository).findByIdempotencyKeyAndCustomerId(idempotencyKey, customerId);
+        }
+
+        @Test
+        @DisplayName("should throw InvalidIdempotencyKeyException when idempotencyKey is null")
+        void shouldThrowWhenIdempotencyKeyIsNull() {
+            assertThatThrownBy(() -> orderService.findByIdempotencyKey(customerId, null, validRequest))
+                    .isInstanceOf(InvalidIdempotencyKeyException.class);
+
+            verifyNoInteractions(orderRepository);
+        }
+
+        @Test
+        @DisplayName("should throw InvalidIdempotencyKeyException when idempotencyKey is blank")
+        void shouldThrowWhenIdempotencyKeyIsBlank() {
+            assertThatThrownBy(() -> orderService.findByIdempotencyKey(customerId, "   ", validRequest))
+                    .isInstanceOf(InvalidIdempotencyKeyException.class);
+
+            verifyNoInteractions(orderRepository);
+        }
+
+        @Test
+        @DisplayName("should throw IdempotencyConflictException when request is null")
+        void shouldThrowWhenRequestIsNull() {
+            assertThatThrownBy(() -> orderService.findByIdempotencyKey(customerId, idempotencyKey, null))
+                    .isInstanceOf(IdempotencyConflictException.class)
+                    .hasMessage("Customer ID does not match the Order request");
+
+            verifyNoInteractions(orderRepository);
+        }
+
+        @Test
+        @DisplayName("should throw IdempotencyConflictException when customerId is null")
+        void shouldThrowWhenCustomerIdIsNull() {
+            assertThatThrownBy(() -> orderService.findByIdempotencyKey(null, idempotencyKey, validRequest))
+                    .isInstanceOf(IdempotencyConflictException.class)
+                    .hasMessage("Customer ID does not match the Order request");
+
+            verifyNoInteractions(orderRepository);
+        }
+
+        @Test
+        @DisplayName("should throw IdempotencyConflictException when customerId does not match request customerId")
+        void shouldThrowWhenCustomerIdDoesNotMatchRequest() {
+            UUID differentCustomer = UUID.randomUUID();
+
+            assertThatThrownBy(() -> orderService.findByIdempotencyKey(differentCustomer, idempotencyKey, validRequest))
+                    .isInstanceOf(IdempotencyConflictException.class)
+                    .hasMessage("Customer ID does not match the Order request");
+
+            verifyNoInteractions(orderRepository);
+        }
+
+        @Test
+        @DisplayName("should throw OrderNotFoundException when order does not exist")
+        void shouldThrowOrderNotFoundExceptionWhenOrderNotFound() {
+            when(orderRepository.findByIdempotencyKeyAndCustomerId(idempotencyKey, customerId))
+                    .thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> orderService.findByIdempotencyKey(customerId, idempotencyKey, validRequest))
+                    .isInstanceOf(OrderNotFoundException.class)
+                    .hasMessage("No Order found for this checkout");
+
+            verify(orderRepository).findByIdempotencyKeyAndCustomerId(idempotencyKey, customerId);
+        }
+
+        @Test
+        @DisplayName("should throw IdempotencyConflictException when existing order items do not match request")
+        void shouldThrowIdempotencyConflictExceptionWhenItemsMismatch() {
+            UUID orderId = UUID.randomUUID();
+            Order existingOrder = Order.builder()
+                    .id(orderId)
+                    .customerId(customerId)
+                    .status(OrderStatus.PENDING)
+                    .idempotencyKey(idempotencyKey)
+                    .items(List.of(OrderItem.builder().productId(productId).quantity(5).build())) // Different quantity
+                    .build();
+
+            when(orderRepository.findByIdempotencyKeyAndCustomerId(idempotencyKey, customerId))
+                    .thenReturn(Optional.of(existingOrder));
+
+            assertThatThrownBy(() -> orderService.findByIdempotencyKey(customerId, idempotencyKey, validRequest))
+                    .isInstanceOf(IdempotencyConflictException.class)
+                    .hasMessage("Idempotency key was already used with different Order items");
+
+            verify(orderRepository).findByIdempotencyKeyAndCustomerId(idempotencyKey, customerId);
         }
     }
 }

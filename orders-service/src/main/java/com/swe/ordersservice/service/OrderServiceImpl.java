@@ -173,4 +173,24 @@ public class OrderServiceImpl implements OrderService {
 
         return true;
     }
+
+
+    @Override
+    @Transactional(readOnly = true)
+    public OrderResponse findByIdempotencyKey(UUID customerId, String idempotencyKey, OrderRequest request) {
+
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new InvalidIdempotencyKeyException();
+        }
+
+        if (request == null || customerId == null || !customerId.equals(request.customerId())) {
+            throw new IdempotencyConflictException("Customer ID does not match the Order request");
+        }
+
+        Order order = orderRepository.findByIdempotencyKeyAndCustomerId(idempotencyKey, customerId)
+                .orElseThrow(() -> new OrderNotFoundException("No Order found for this checkout"));
+
+        return replayOrder(order, request);
+    }
+
 }

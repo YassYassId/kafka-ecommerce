@@ -59,6 +59,24 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("handleOrderNotFoundException should return 404 Not Found with custom message")
+    void handleOrderNotFoundException_WithCustomMessage_ShouldReturn404() {
+        // Arrange
+        OrderNotFoundException ex = new OrderNotFoundException("No Order found for this checkout");
+
+        // Act
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleOrderNotFoundException(ex, request);
+
+        // Assert
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo(404);
+        assertThat(response.getBody().error()).isEqualTo("Not Found");
+        assertThat(response.getBody().message()).isEqualTo("No Order found for this checkout");
+        assertThat(response.getBody().path()).isEqualTo("/api/v1/orders");
+    }
+
+    @Test
     @DisplayName("handleMethodArgumentNotValidException should return 400 Bad Request with field errors")
     void handleMethodArgumentNotValidException_ShouldReturn400WithFieldErrors() {
         // Arrange

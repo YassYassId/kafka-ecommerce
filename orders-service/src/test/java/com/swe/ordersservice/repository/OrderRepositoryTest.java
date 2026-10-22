@@ -195,4 +195,59 @@ class OrderRepositoryTest {
         assertThatThrownBy(() -> orderRepository.saveAndFlush(order2))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
+
+    @Test
+    @DisplayName("should save and retrieve order by idempotency key and customer ID with eagerly loaded items")
+    void shouldSaveAndRetrieveOrderByIdempotencyKeyAndCustomerId() {
+        String idempotencyKey = UUID.randomUUID().toString();
+        UUID customerId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+
+        Order order = Order.builder()
+                .customerId(customerId)
+                .status(OrderStatus.PENDING)
+                .idempotencyKey(idempotencyKey)
+                .build();
+        order.addItem(OrderItem.builder()
+                .productId(productId)
+                .quantity(3)
+                .build());
+
+        orderRepository.saveAndFlush(order);
+        entityManager.clear();
+
+        var retrieved = orderRepository.findByIdempotencyKeyAndCustomerId(idempotencyKey, customerId);
+        assertThat(retrieved).isPresent();
+        assertThat(retrieved.get().getIdempotencyKey()).isEqualTo(idempotencyKey);
+        assertThat(retrieved.get().getCustomerId()).isEqualTo(customerId);
+        assertThat(retrieved.get().getItems()).hasSize(1);
+        assertThat(retrieved.get().getItems().getFirst().getProductId()).isEqualTo(productId);
+        assertThat(retrieved.get().getItems().getFirst().getQuantity()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("should return empty when idempotency key exists but customer ID does not match")
+    void shouldReturnEmptyWhenIdempotencyKeyExistsButCustomerIdDoesNotMatch() {
+        String idempotencyKey = UUID.randomUUID().toString();
+        UUID customerId = UUID.randomUUID();
+        UUID differentCustomerId = UUID.randomUUID();
+
+        Order order = Order.builder()
+                .customerId(customerId)
+                .status(OrderStatus.PENDING)
+                .idempotencyKey(idempotencyKey)
+                .build();
+        orderRepository.saveAndFlush(order);
+        entityManager.clear();
+
+        var retrieved = orderRepository.findByIdempotencyKeyAndCustomerId(idempotencyKey, differentCustomerId);
+        assertThat(retrieved).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should return empty when idempotency key does not exist")
+    void shouldReturnEmptyWhenIdempotencyKeyDoesNotExist() {
+        var retrieved = orderRepository.findByIdempotencyKeyAndCustomerId("non-existent-key", UUID.randomUUID());
+        assertThat(retrieved).isEmpty();
+    }
 }

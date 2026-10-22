@@ -34,4 +34,15 @@ public class OrderController {
         OrderResponse response = orderService.getOrder(orderId);
         return ResponseEntity.ok(response);
     }
+
+
+    @PostMapping("/checkout-reconciliation")
+    public ResponseEntity<OrderResponse> reconcileCheckout(@RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody OrderRequest request) {
+
+        OrderResponse response = orderService.findByIdempotencyKey(request.customerId(), idempotencyKey, request);
+
+        return ResponseEntity.ok(response);
+    }
+
 }
