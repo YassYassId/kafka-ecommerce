@@ -1,10 +1,7 @@
 package com.swe.cartservice.service;
 
 import com.swe.cartservice.client.catalog.CatalogClient;
-import com.swe.cartservice.client.order.CreateOrderItemRequest;
-import com.swe.cartservice.client.order.CreateOrderRequest;
-import com.swe.cartservice.client.order.OrderClient;
-import com.swe.cartservice.client.order.OrderResponse;
+import com.swe.cartservice.client.order.*;
 import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.dto.CatalogProductResponse;
 import com.swe.cartservice.dto.CheckoutResponse;
@@ -46,8 +43,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -708,6 +704,9 @@ class CartServiceImplTest {
             assertThat(recordCaptor.getValue().orderId()).isEqualTo(orderId);
             assertThat(recordCaptor.getValue().status()).isEqualTo("PENDING");
             assertThat(leaseTokenCaptor.getValue()).isNotBlank();
+
+            // Scenario 6: reconcileCheckout must never be called on a fresh ACQUIRED checkout
+            verify(orderClient, never()).reconcileCheckout(anyString(), any(CreateOrderRequest.class));
         }
 
         @Test
@@ -718,22 +717,60 @@ class CartServiceImplTest {
             UUID orderId = UUID.randomUUID();
             String rawJson = "{\"customerId\":\"" + customerId + "\"}";
 
-            Cart cart = new Cart(
-                    customerId,
-                    List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))),
-                    OffsetDateTime.now()
-            );
-            CatalogProductResponse product = new CatalogProductResponse(
-                    productId1, new BigDecimal("10.00"), "USD", ProductStatus.ACTIVE
-            );
+            Cart cart = new Cart(customerId, List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))), OffsetDateTime.now());
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class))).thenReturn(CheckoutClaimResult.RESUMED);
+
+            when(checkoutRepository.findClaim(customerId)).thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
+
+            OrderResponse orderResponse = new OrderResponse(orderId, "PENDING");
+
+            when(orderClient.reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class))).thenReturn(OrderReconciliationResult.found(orderResponse));
+
+            when(checkoutRepository.completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class))).thenReturn(true);
+
+            // Act
+            CheckoutResponse response = cartService.checkout(customerId, idempotencyKey);
+
+            // Assert
+            assertThat(response).isNotNull();
+            assertThat(response.orderId()).isEqualTo(orderId);
+            assertThat(response.status()).isEqualTo("PENDING");
+
+            verify(orderClient).reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class));
+
+            verify(orderClient, never()).createOrder(anyString(), any(CreateOrderRequest.class));
+            verify(catalogClient, never()).getProduct(any(UUID.class));
+            verify(checkoutRepository).completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class));
+
+            // Scenario 1: durable claim must never be released when order was recovered
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should validate catalog and create order when resumed checkout reconciliation returns notFound")
+        void shouldValidateCatalogAndCreateOrderWhenResumedCheckoutReconciliationReturnsNotFound() throws Exception {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            UUID orderId = UUID.randomUUID();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            Cart cart = new Cart(customerId, List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))), OffsetDateTime.now());
+            CatalogProductResponse product = new CatalogProductResponse(productId1, new BigDecimal("10.00"), "USD", ProductStatus.ACTIVE);
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
             when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
-                    .thenReturn(CheckoutClaimResult.RESUMED);
-            when(checkoutRepository.findClaim(customerId))
-                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class))).thenReturn(CheckoutClaimResult.RESUMED);
+            when(checkoutRepository.findClaim(customerId)).thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
             when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
+
+            when(orderClient.reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class))).thenReturn(OrderReconciliationResult.notFound());
             when(catalogClient.getProduct(productId1)).thenReturn(product);
 
             OrderResponse orderResponse = new OrderResponse(orderId, "PENDING");
@@ -747,7 +784,40 @@ class CartServiceImplTest {
             assertThat(response).isNotNull();
             assertThat(response.orderId()).isEqualTo(orderId);
             assertThat(response.status()).isEqualTo("PENDING");
+
+            verify(orderClient).reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class));
+            verify(catalogClient).getProduct(productId1);
+            verify(orderClient).createOrder(eq(idempotencyKey), any(CreateOrderRequest.class));
             verify(checkoutRepository).completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class));
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should not release durable claim when resumed checkout catalog validation fails after reconciliation notFound")
+        void shouldNotReleaseClaimWhenResumedCheckoutCatalogValidationFails() throws Exception {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            Cart cart = new Cart(customerId, List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))), OffsetDateTime.now());
+            CatalogProductResponse inactiveProduct = new CatalogProductResponse(productId1, new BigDecimal("10.00"), "USD", ProductStatus.RETIRED);
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class))).thenReturn(CheckoutClaimResult.RESUMED);
+            when(checkoutRepository.findClaim(customerId)).thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
+
+            when(orderClient.reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class))).thenReturn(OrderReconciliationResult.notFound());
+            when(catalogClient.getProduct(productId1)).thenReturn(inactiveProduct);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(ProductNotAvailableException.class);
+
+            verify(orderClient).reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class));
+            verify(orderClient, never()).createOrder(anyString(), any(CreateOrderRequest.class));
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
         }
 
         @Test
@@ -1153,6 +1223,80 @@ class CartServiceImplTest {
                     .isInstanceOf(CheckoutConflictException.class);
 
             verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should not release durable claim and propagate exception when reconciliation is unavailable on RESUMED checkout")
+        void shouldNotReleaseClaimWhenReconciliationIsUnavailableOnResumed() throws Exception {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            Cart cart = new Cart(customerId, List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))), OffsetDateTime.now());
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.RESUMED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
+
+            // Scenario 3: reconcile itself throws (5xx / timeout)
+            when(orderClient.reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class)))
+                    .thenThrow(new OrderServiceUnavailableException());
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(OrderServiceUnavailableException.class);
+
+            // Catalog must never be called — we bail before it
+            verify(catalogClient, never()).getProduct(any(UUID.class));
+            // createOrder must never be called
+            verify(orderClient, never()).createOrder(anyString(), any(CreateOrderRequest.class));
+            // completeCheckout must never be called
+            verify(checkoutRepository, never()).completeCheckout(any(), any(), any());
+            // durable claim must not be released
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should throw CheckoutConflictException and NOT release durable claim when completeCheckout fails after recovering existing order")
+        void shouldNotReleaseClaimWhenCompleteCheckoutFailsAfterRecoveredOrder() throws Exception {
+            // Arrange
+            String idempotencyKey = UUID.randomUUID().toString();
+            UUID orderId = UUID.randomUUID();
+            String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+
+            Cart cart = new Cart(customerId, List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))), OffsetDateTime.now());
+
+            when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class)))
+                    .thenReturn(CheckoutClaimResult.RESUMED);
+            when(checkoutRepository.findClaim(customerId))
+                    .thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
+            when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
+
+            // Scenario 5: reconcile finds the order (200)
+            OrderResponse orderResponse = new OrderResponse(orderId, "PENDING");
+            when(orderClient.reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class)))
+                    .thenReturn(OrderReconciliationResult.found(orderResponse));
+
+            // But Redis completion fails (stale lease / race condition)
+            when(checkoutRepository.completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class)))
+                    .thenReturn(false);
+
+            // Act & Assert
+            assertThatThrownBy(() -> cartService.checkout(customerId, idempotencyKey))
+                    .isInstanceOf(CheckoutConflictException.class);
+
+            // The order already exists in PostgreSQL — durable claim must NOT be released
+            verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
+            // createOrder must never be called — the order was recovered, not re-created
+            verify(orderClient, never()).createOrder(anyString(), any(CreateOrderRequest.class));
+            // catalog must never be called
+            verify(catalogClient, never()).getProduct(any(UUID.class));
         }
     }
 }

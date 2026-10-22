@@ -1,10 +1,7 @@
 package com.swe.cartservice.service;
 
 import com.swe.cartservice.client.catalog.CatalogClient;
-import com.swe.cartservice.client.order.CreateOrderItemRequest;
-import com.swe.cartservice.client.order.CreateOrderRequest;
-import com.swe.cartservice.client.order.OrderClient;
-import com.swe.cartservice.client.order.OrderResponse;
+import com.swe.cartservice.client.order.*;
 import com.swe.cartservice.dto.AddCartItemRequest;
 import com.swe.cartservice.dto.CatalogProductResponse;
 import com.swe.cartservice.dto.CheckoutResponse;
@@ -219,49 +216,84 @@ public class CartServiceImpl implements CartService {
             throw new CheckoutConflictException();
         }
 
-        CreateOrderRequest orderRequest;
+        // 7. Build the exact Order request from the durable cart snapshot.
+        // This does not require Catalog Service.
+        if (cart.items().isEmpty()) {
 
-        // 7. Validate the cart and products before contacting Orders Service.
-        try {
-
-            if (cart.items().isEmpty()) {
-                throw new EmptyCartException(customerId);
-            }
-
-            List<CreateOrderItemRequest> orderItems = new ArrayList<>();
-
-            for (CartItem item : cart.items()) {
-
-                CatalogProductResponse product = catalogClient.getProduct(item.productId());
-
-                if (product.status() != ProductStatus.ACTIVE) {
-                    throw new ProductNotAvailableException(item.productId());
-                }
-
-                orderItems.add(new CreateOrderItemRequest(item.productId(), item.quantity()));
-            }
-
-            orderRequest = new CreateOrderRequest(customerId, List.copyOf(orderItems));
-
-        } catch (RuntimeException ex) {
-
-            // Orders Service has not been contacted.
-            // Releasing the claim is safe only for a fresh checkout.
-            // A resumed checkout might already have created an Order.
             if (claimResult == CheckoutClaimResult.ACQUIRED) {
                 checkoutRepository.releaseClaim(customerId, idempotencyKey, leaseToken);
             }
 
-            throw ex;
+            throw new EmptyCartException(customerId);
         }
 
-        // 8. Create or replay the Order.
-        // If this call times out, preserve the durable claim.
-        OrderResponse order = orderClient.createOrder(idempotencyKey, orderRequest);
+        List<CreateOrderItemRequest> orderItems = cart.items().stream()
+                .map(item -> new CreateOrderItemRequest(item.productId(), item.quantity()))
+                .toList();
 
-        log.info("Order created/replayed: customerId={}, orderId={}", customerId, order.orderId());
+        CreateOrderRequest orderRequest = new CreateOrderRequest(customerId, List.copyOf(orderItems));
 
-        // 9. Complete checkout atomically in Redis.
+        OrderResponse order = null;
+
+        // 8. A resumed checkout may already have created an Order.
+        //
+        // Reconcile BEFORE Catalog validation because the Order may already
+        // exist even if the product has since become unavailable.
+        if (claimResult == CheckoutClaimResult.RESUMED) {
+
+            log.info("Reconciling resumed checkout: customerId={}", customerId);
+
+            OrderReconciliationResult reconciliation = orderClient.reconcileCheckout(idempotencyKey, orderRequest);
+
+            if (reconciliation.found()) {
+
+                order = reconciliation.order()
+                        .orElseThrow(() -> new IllegalStateException("Reconciliation reported an Order but returned none"));
+
+                log.info("Recovered existing Order: customerId={}, orderId={}", customerId, order.orderId());
+            }
+        }
+
+        // 9. No existing Order was recovered.
+        //
+        // For a fresh checkout this is always executed.
+        // For a resumed checkout it is executed only when reconciliation
+        // returned 404.
+        if (order == null) {
+
+            try {
+
+                for (CartItem item : cart.items()) {
+
+                    CatalogProductResponse product = catalogClient.getProduct(item.productId());
+
+                    if (product.status() != ProductStatus.ACTIVE) {
+                        throw new ProductNotAvailableException(item.productId());
+                    }
+                }
+
+            } catch (RuntimeException ex) {
+
+                // Releasing the durable claim is safe only for a fresh checkout.
+                //
+                // For RESUMED, even after reconciliation returned 404,
+                // an earlier Order request could still be committing.
+                if (claimResult == CheckoutClaimResult.ACQUIRED) {
+
+                    checkoutRepository.releaseClaim(customerId, idempotencyKey, leaseToken);
+                }
+
+                throw ex;
+            }
+
+            // Orders Service remains the final idempotency authority.
+            order = orderClient.createOrder(idempotencyKey, orderRequest);
+
+            log.info("Order created/replayed: customerId={}, orderId={}", customerId, order.orderId());
+        }
+
+        // 10. Whether created normally or recovered through reconciliation,
+        // complete the Redis checkout in exactly the same way.
         CheckoutRecord record = new CheckoutRecord(customerId, idempotencyKey, order.orderId(), order.status());
 
         boolean completed = checkoutRepository.completeCheckout(record, originalCartJson, leaseToken);
@@ -269,8 +301,11 @@ public class CartServiceImpl implements CartService {
         log.info("Checkout completion: customerId={}, completed={}", customerId, completed);
 
         if (!completed) {
-            // Do not release the claim:
-            // the Order may already exist in PostgreSQL.
+
+            // Never release the durable claim here.
+            //
+            // At this point an Order definitely exists in PostgreSQL.
+            // A later retry must be able to reconcile it.
             throw new CheckoutConflictException();
         }
 

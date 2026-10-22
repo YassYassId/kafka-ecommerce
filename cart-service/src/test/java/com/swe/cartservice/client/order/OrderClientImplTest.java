@@ -149,4 +149,130 @@ class OrderClientImplTest {
                 .isInstanceOf(OrderServiceUnavailableException.class)
                 .hasMessage("Orders service is temporarily unavailable");
     }
+
+    @Test
+    @DisplayName("should successfully reconcile checkout when orders service returns existing order")
+    void shouldReconcileCheckoutSuccessfullyWhenFound() {
+        // Arrange
+        UUID orderId = UUID.randomUUID();
+        String responseJson = """
+                {
+                    "orderId": "%s",
+                    "status": "PENDING"
+                }
+                """.formatted(orderId);
+
+        CreateOrderRequest request = new CreateOrderRequest(
+                customerId,
+                List.of(new CreateOrderItemRequest(productId, 2))
+        );
+
+        mockServer.expect(requestTo("/api/v1/orders/checkout-reconciliation"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", idempotencyKey))
+                .andExpect(jsonPath("$.customerId").value(customerId.toString()))
+                .andExpect(jsonPath("$.items[0].productId").value(productId.toString()))
+                .andExpect(jsonPath("$.items[0].quantity").value(2))
+                .andRespond(withSuccess(responseJson, MediaType.APPLICATION_JSON));
+
+        // Act
+        OrderReconciliationResult result = orderClient.reconcileCheckout(idempotencyKey, request);
+
+        // Assert
+        mockServer.verify();
+        assertThat(result.found()).isTrue();
+        assertThat(result.order()).isPresent();
+        assertThat(result.order().get().orderId()).isEqualTo(orderId);
+        assertThat(result.order().get().status()).isEqualTo("PENDING");
+    }
+
+    @Test
+    @DisplayName("should return notFound when orders service returns 404 Not Found during reconciliation")
+    void shouldReturnNotFoundWhenOrderDoesNotExist() {
+        // Arrange
+        CreateOrderRequest request = new CreateOrderRequest(
+                customerId,
+                List.of(new CreateOrderItemRequest(productId, 2))
+        );
+
+        mockServer.expect(requestTo("/api/v1/orders/checkout-reconciliation"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", idempotencyKey))
+                .andRespond(withStatus(HttpStatus.NOT_FOUND));
+
+        // Act
+        OrderReconciliationResult result = orderClient.reconcileCheckout(idempotencyKey, request);
+
+        // Assert
+        mockServer.verify();
+        assertThat(result.found()).isFalse();
+        assertThat(result.order()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("should throw IllegalStateException when orders service returns empty body on 200 during reconciliation")
+    void shouldThrowIllegalStateExceptionWhenReconciliationReturnsEmptyBody() {
+        // Arrange
+        CreateOrderRequest request = new CreateOrderRequest(
+                customerId,
+                List.of(new CreateOrderItemRequest(productId, 2))
+        );
+
+        mockServer.expect(requestTo("/api/v1/orders/checkout-reconciliation"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", idempotencyKey))
+                .andRespond(withSuccess("", MediaType.APPLICATION_JSON));
+
+        // Act & Assert
+        assertThatThrownBy(() -> orderClient.reconcileCheckout(idempotencyKey, request))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Orders Service returned an empty reconciliation response");
+
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("should throw OrderServiceUnavailableException when reconciliation returns 500")
+    void shouldThrowOrderServiceUnavailableWhenReconciliationFailsWith500() {
+        // Arrange
+        CreateOrderRequest request = new CreateOrderRequest(
+                customerId,
+                List.of(new CreateOrderItemRequest(productId, 1))
+        );
+
+        mockServer.expect(requestTo("/api/v1/orders/checkout-reconciliation"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", idempotencyKey))
+                .andRespond(withServerError());
+
+        // Act & Assert
+        assertThatThrownBy(() -> orderClient.reconcileCheckout(idempotencyKey, request))
+                .isInstanceOf(OrderServiceUnavailableException.class)
+                .hasMessage("Orders service is temporarily unavailable");
+
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("should throw OrderServiceUnavailableException when ResourceAccessException occurs during reconciliation")
+    void shouldThrowOrderServiceUnavailableWhenReconciliationNetworkError() {
+        // Arrange
+        RestClient mockRestClient = mock(RestClient.class);
+        RestClient.RequestBodyUriSpec uriSpec = mock(RestClient.RequestBodyUriSpec.class);
+        when(mockRestClient.post()).thenReturn(uriSpec);
+        when(uriSpec.uri(any(String.class))).thenThrow(
+                new ResourceAccessException("I/O error", new IOException("Connection reset"))
+        );
+
+        OrderClientImpl clientWithMock = new OrderClientImpl(mockRestClient);
+        CreateOrderRequest request = new CreateOrderRequest(
+                customerId,
+                List.of(new CreateOrderItemRequest(productId, 1))
+        );
+
+        // Act & Assert
+        assertThatThrownBy(() -> clientWithMock.reconcileCheckout(idempotencyKey, request))
+                .isInstanceOf(OrderServiceUnavailableException.class)
+                .hasMessage("Orders service is temporarily unavailable");
+    }
 }
