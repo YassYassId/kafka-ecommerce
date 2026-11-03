@@ -1,0 +1,38 @@
+spring:
+  application:
+    name: payment-service
+
+  datasource:
+    url: jdbc:postgresql://localhost:5437/payments
+    username: payments_user
+    password: payments_password
+    driver-class-name: org.postgresql.Driver
+
+    jpa:
+      hibernate:
+        ddl-auto: validate
+      open-in-view: false
+
+    flyway:
+      enabled: true
+      baseline-on-migrate: true
+
+
+server:
+  port: 8086
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include:
+            - readinessState
+            - db
