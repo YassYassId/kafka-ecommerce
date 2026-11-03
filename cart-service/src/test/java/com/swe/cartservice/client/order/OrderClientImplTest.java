@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
@@ -274,5 +275,43 @@ class OrderClientImplTest {
         assertThatThrownBy(() -> clientWithMock.reconcileCheckout(idempotencyKey, request))
                 .isInstanceOf(OrderServiceUnavailableException.class)
                 .hasMessage("Orders service is temporarily unavailable");
+    }
+
+    @Test
+    @DisplayName("should propagate 400 instead of returning notFound during reconciliation")
+    void shouldPropagateBadRequestWhenReconciliationReturns400() {
+        // Arrange
+        CreateOrderRequest request = new CreateOrderRequest(
+                customerId, List.of(new CreateOrderItemRequest(productId, 1)));
+        mockServer.expect(requestTo("/api/v1/orders/checkout-reconciliation"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", idempotencyKey))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST));
+
+        // Act & Assert
+        assertThatThrownBy(() -> orderClient.reconcileCheckout(idempotencyKey, request))
+                .isInstanceOf(HttpClientErrorException.BadRequest.class)
+                .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("should propagate 409 instead of returning notFound during reconciliation")
+    void shouldPropagateConflictWhenReconciliationReturns409() {
+        // Arrange
+        CreateOrderRequest request = new CreateOrderRequest(
+                customerId, List.of(new CreateOrderItemRequest(productId, 1)));
+        mockServer.expect(requestTo("/api/v1/orders/checkout-reconciliation"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("Idempotency-Key", idempotencyKey))
+                .andRespond(withStatus(HttpStatus.CONFLICT));
+
+        // Act & Assert
+        assertThatThrownBy(() -> orderClient.reconcileCheckout(idempotencyKey, request))
+                .isInstanceOf(HttpClientErrorException.Conflict.class)
+                .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.CONFLICT));
+        mockServer.verify();
     }
 }

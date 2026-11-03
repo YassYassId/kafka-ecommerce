@@ -45,6 +45,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -704,6 +705,9 @@ class CartServiceImplTest {
             assertThat(recordCaptor.getValue().orderId()).isEqualTo(orderId);
             assertThat(recordCaptor.getValue().status()).isEqualTo("PENDING");
             assertThat(leaseTokenCaptor.getValue()).isNotBlank();
+            verify(checkoutRepository).acquireCheckout(customerId, idempotencyKey, rawJson, leaseTokenCaptor.getValue());
+            verify(catalogClient).getProduct(productId1);
+            verify(catalogClient).getProduct(productId2);
 
             // Scenario 6: reconcileCheckout must never be called on a fresh ACQUIRED checkout
             verify(orderClient, never()).reconcileCheckout(anyString(), any(CreateOrderRequest.class));
@@ -760,13 +764,16 @@ class CartServiceImplTest {
             String idempotencyKey = UUID.randomUUID().toString();
             UUID orderId = UUID.randomUUID();
             String rawJson = "{\"customerId\":\"" + customerId + "\"}";
+            // Deliberately distinguish the initial read from the durable snapshot.
+            // Acquisition is mocked here: this checks service source selection only.
+            String currentCartJson = "{\"customerId\":\"" + customerId + "\",\"items\":[]}";
 
             Cart cart = new Cart(customerId, List.of(new CartItem(productId1, 1, new BigDecimal("10.00"))), OffsetDateTime.now());
             CatalogProductResponse product = new CatalogProductResponse(productId1, new BigDecimal("10.00"), "USD", ProductStatus.ACTIVE);
 
             when(checkoutRepository.findByCustomerIdAndKey(customerId, idempotencyKey)).thenReturn(Optional.empty());
-            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(rawJson));
-            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), any(String.class))).thenReturn(CheckoutClaimResult.RESUMED);
+            when(cartRepository.findRawCartByCustomerId(customerId)).thenReturn(Optional.of(currentCartJson));
+            when(checkoutRepository.acquireCheckout(eq(customerId), eq(idempotencyKey), eq(currentCartJson), any(String.class))).thenReturn(CheckoutClaimResult.RESUMED);
             when(checkoutRepository.findClaim(customerId)).thenReturn(Optional.of(new CheckoutClaim(idempotencyKey, rawJson)));
             when(objectMapper.readValue(rawJson, Cart.class)).thenReturn(cart);
 
@@ -785,10 +792,27 @@ class CartServiceImplTest {
             assertThat(response.orderId()).isEqualTo(orderId);
             assertThat(response.status()).isEqualTo("PENDING");
 
-            verify(orderClient).reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class));
+            // Verify reconciliation called exactly once
+            verify(orderClient, times(1)).reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class));
             verify(catalogClient).getProduct(productId1);
-            verify(orderClient).createOrder(eq(idempotencyKey), any(CreateOrderRequest.class));
-            verify(checkoutRepository).completeCheckout(any(CheckoutRecord.class), eq(rawJson), any(String.class));
+
+            // Capture the CreateOrderRequest passed to createOrder
+            ArgumentCaptor<CreateOrderRequest> orderRequestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+            verify(orderClient).createOrder(eq(idempotencyKey), orderRequestCaptor.capture());
+            CreateOrderRequest capturedRequest = orderRequestCaptor.getValue();
+            assertThat(capturedRequest.customerId()).isEqualTo(customerId);
+            assertThat(capturedRequest.items()).hasSize(1);
+            assertThat(capturedRequest.items().get(0).productId()).isEqualTo(productId1);
+            assertThat(capturedRequest.items().get(0).quantity()).isEqualTo(1);
+
+            verify(objectMapper).readValue(rawJson, Cart.class);
+            verify(objectMapper, never()).readValue(currentCartJson, Cart.class);
+            verify(orderClient).reconcileCheckout(idempotencyKey, capturedRequest);
+            ArgumentCaptor<String> leaseTokenCaptor = ArgumentCaptor.forClass(String.class);
+            verify(checkoutRepository).acquireCheckout(eq(customerId), eq(idempotencyKey), eq(currentCartJson), leaseTokenCaptor.capture());
+            assertThat(leaseTokenCaptor.getValue()).isNotBlank();
+            verify(checkoutRepository).completeCheckout(
+                    new CheckoutRecord(customerId, idempotencyKey, orderId, "PENDING"), rawJson, leaseTokenCaptor.getValue());
             verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
         }
 
@@ -817,6 +841,8 @@ class CartServiceImplTest {
 
             verify(orderClient).reconcileCheckout(eq(idempotencyKey), any(CreateOrderRequest.class));
             verify(orderClient, never()).createOrder(anyString(), any(CreateOrderRequest.class));
+            // Ensure checkout completion is never attempted
+            verify(checkoutRepository, never()).completeCheckout(any(), any(), any());
             verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
         }
 
@@ -857,8 +883,13 @@ class CartServiceImplTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Idempotency-Key must not be blank");
 
+            assertThatThrownBy(() -> cartService.checkout(customerId, ""))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Idempotency-Key must not be blank");
+
             verifyNoInteractions(checkoutRepository);
             verifyNoInteractions(cartRepository);
+            verifyNoInteractions(catalogClient, orderClient, objectMapper);
         }
 
         @Test
@@ -1032,7 +1063,11 @@ class CartServiceImplTest {
                     .isInstanceOf(EmptyCartException.class)
                     .hasMessageContaining(customerId.toString());
 
-            verify(checkoutRepository).releaseClaim(eq(customerId), eq(idempotencyKey), any(String.class));
+            ArgumentCaptor<String> leaseTokenCaptor = ArgumentCaptor.forClass(String.class);
+            verify(checkoutRepository).acquireCheckout(eq(customerId), eq(idempotencyKey), eq(rawJson), leaseTokenCaptor.capture());
+            assertThat(leaseTokenCaptor.getValue()).isNotBlank();
+            verify(checkoutRepository).releaseClaim(customerId, idempotencyKey, leaseTokenCaptor.getValue());
+            verify(checkoutRepository, never()).completeCheckout(any(), any(), any());
             verifyNoInteractions(catalogClient);
             verifyNoInteractions(orderClient);
         }
@@ -1059,6 +1094,7 @@ class CartServiceImplTest {
                     .hasMessageContaining(customerId.toString());
 
             verify(checkoutRepository, never()).releaseClaim(any(), any(), any());
+            verify(checkoutRepository, never()).completeCheckout(any(), any(), any());
             verifyNoInteractions(catalogClient);
             verifyNoInteractions(orderClient);
         }
